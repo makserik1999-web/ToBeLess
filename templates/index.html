@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>AI Fight Detection System</title>
+
+    <!-- Chart.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+
+    <!-- CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🥊 AI Fight Detection System</h1>
+            <p>Real-time violence detection using pose estimation and computer vision</p>
+        </div>
+
+        <div class="main-grid">
+            <div class="video-section">
+                <div class="video-controls">
+                    <div class="control-group">
+                        <label>Source:</label>
+                        <select id="sourceType">
+                            <option value="0">Webcam</option>
+                            <option value="video">Video File</option>
+                            <option value="rtsp">RTSP Stream</option>
+                        </select>
+                        <input type="text" id="sourceInput" placeholder="Enter path or RTSP URL" style="display: none;">
+                        <!-- file input for local upload -->
+                        <input type="file" id="fileInput" accept="video/*">
+                    </div>
+                    <div class="control-group">
+                        <button class="btn primary" id="startBtn">▶️ Start Detection</button>
+                        <button class="btn danger" id="stopBtn" disabled>⏹️ Stop Detection</button>
+                    </div>
+                    <div id="statusAlert" class="alert"></div>
+                </div>
+                    <div class="video-display">
+                    <!-- плейсхолдер пока ничего не выбрано -->
+                        <div class="video-placeholder" id="videoPlaceholder">
+                            Select a source and click "Start Detection" to begin
+                        </div>
+                    
+                        <!-- live stream (MJPEG). Используем <img> для простого MJPEG-потока -->
+                        <img id="videoFeed" alt="Live video feed"
+                             style="display: none; max-width: 100%; border-radius: 8px;">
+                    
+                        <!-- uploaded video playback -->
+                        <video id="uploadedVideo" controls style="display: none; max-width: 100%; border-radius: 8px;">
+                            <source id="uploadedVideoSource" src="" type="video/mp4">
+                            Your browser does not support the video tag.
+                        </video>
+                    </div>
+
+
+            </div>
+
+            <div class="status-panel">
+                <div class="status-indicator status-normal" id="statusIndicator">
+                    🟢 System Ready
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="peopleCount">0</div>
+                        <div class="stat-label">People Detected</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="fightCount">0</div>
+                        <div class="stat-label">Fights Detected</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="confidence">0%</div>
+                        <div class="stat-label">Detection Confidence</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="fps">0</div>
+                        <div class="stat-label">FPS</div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h3>⚙️ Detection Settings</h3>
+                    <div class="setting-item">
+                        <label>Body Proximity Threshold:</label>
+                        <input type="number" id="bodyThreshold" value="120" min="50" max="300">
+                    </div>
+                    <div class="setting-item">
+                        <label>Limb Proximity Threshold:</label>
+                        <input type="number" id="limbThreshold" value="50" min="20" max="150">
+                    </div>
+                    <div class="setting-item">
+                        <label>Fight Hold Duration (frames):</label>
+                        <input type="number" id="holdDuration" value="60" min="10" max="200">
+                    </div>
+                    <button class="btn" id="updateSettings">Update Settings</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="charts-section">
+            <div class="chart-container">
+                <h3>📊 People Count Over Time</h3>
+                <div class="chart-wrapper">
+                    <canvas id="peopleChart" class="chart-canvas"></canvas>
+                </div>
+            </div>
+            <div class="chart-container">
+                <h3>🎯 Detection Confidence</h3>
+                <div class="chart-wrapper">
+                    <canvas id="confidenceChart" class="chart-canvas"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="events-section">
+            <h3>📝 Recent Fight Events</h3>
+            <div class="event-log" id="eventLog">
+                <div style="text-align: center; color: #666; padding: 20px;">
+                    No events recorded yet
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- App script (after DOM and after Chart.js) -->
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>
