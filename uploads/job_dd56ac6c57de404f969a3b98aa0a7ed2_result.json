@@ -1,0 +1,134 @@
+{
+  "job_id": "dd56ac6c57de404f969a3b98aa0a7ed2",
+  "analytics": {
+    "total_detections": 1,
+    "fight_duration_history": [],
+    "people_count_history": [
+      {
+        "frame": 1,
+        "count": 2,
+        "timestamp": "2025-10-25T15:06:56.052366"
+      },
+      {
+        "frame": 2,
+        "count": 2,
+        "timestamp": "2025-10-25T15:06:56.533770"
+      },
+      {
+        "frame": 3,
+        "count": 2,
+        "timestamp": "2025-10-25T15:06:57.117999"
+      },
+      {
+        "frame": 4,
+        "count": 2,
+        "timestamp": "2025-10-25T15:06:57.703062"
+      },
+      {
+        "frame": 5,
+        "count": 2,
+        "timestamp": "2025-10-25T15:06:58.183213"
+      },
+      {
+        "frame": 6,
+        "count": 2,
+        "timestamp": "2025-10-25T15:06:58.719211"
+      },
+      {
+        "frame": 7,
+        "count": 2,
+        "timestamp": "2025-10-25T15:06:59.182507"
+      },
+      {
+        "frame": 8,
+        "count": 2,
+        "timestamp": "2025-10-25T15:06:59.707102"
+      },
+      {
+        "frame": 9,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:00.249419"
+      },
+      {
+        "frame": 10,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:00.697943"
+      },
+      {
+        "frame": 11,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:01.169935"
+      },
+      {
+        "frame": 12,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:01.719595"
+      },
+      {
+        "frame": 13,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:02.199664"
+      },
+      {
+        "frame": 14,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:02.686241"
+      },
+      {
+        "frame": 15,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:03.229965"
+      },
+      {
+        "frame": 16,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:03.651877"
+      },
+      {
+        "frame": 17,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:04.145833"
+      },
+      {
+        "frame": 18,
+        "count": 3,
+        "timestamp": "2025-10-25T15:07:04.648645"
+      },
+      {
+        "frame": 19,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:05.170676"
+      },
+      {
+        "frame": 20,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:05.971551"
+      },
+      {
+        "frame": 21,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:06.488399"
+      },
+      {
+        "frame": 22,
+        "count": 2,
+        "timestamp": "2025-10-25T15:07:06.984531"
+      }
+    ],
+    "detection_confidence_history": [
+      {
+        "frame": 18,
+        "confidence": 60.0,
+        "timestamp": "2025-10-25T15:07:04.652635"
+      }
+    ],
+    "fight_events": [
+      {
+        "start_frame": 18,
+        "start_time": "2025-10-25T15:07:04.652635",
+        "confidence": 60.0
+      }
+    ]
+  },
+  "ended_at": "2025-10-25T15:07:06.999422"
+}

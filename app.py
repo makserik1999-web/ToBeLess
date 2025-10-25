@@ -384,6 +384,10 @@ def frame_generator():
 def index():
     return render_template('index.html')
 
+@app.route('/detection')     # Страница детекции
+def detection():
+    return render_template('detection.html')
+
 @app.route('/start_stream', methods=['POST'])
 def start_stream():
     global detector, video_cap, proc_thread, stream_active

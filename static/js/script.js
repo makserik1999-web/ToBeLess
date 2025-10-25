@@ -276,10 +276,10 @@ class FDApp {
             if (this.elems.statusIndicator) {
                 if (fight) {
                     this.elems.statusIndicator.className = 'status-indicator status-fight';
-                    this.elems.statusIndicator.textContent = '🔴 Fight detected';
+                    this.elems.statusIndicator.textContent = ' Fight detected';
                 } else {
                     this.elems.statusIndicator.className = 'status-indicator status-normal';
-                    this.elems.statusIndicator.textContent = '🟢 System Ready';
+                    this.elems.statusIndicator.textContent = ' System Ready';
                 }
             }
 
