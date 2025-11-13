@@ -1,0 +1,27 @@
+{
+  "job_id": "b51394bff315482294323fe7778f2add",
+  "analytics": {
+    "fight": {
+      "total_detections": 0,
+      "fight_duration_history": [],
+      "people_count_history": [],
+      "detection_confidence_history": [],
+      "fight_events": [],
+      "conflict_types": {
+        "minor_scuffle": 0,
+        "active_fight": 0,
+        "group_conflict": 1,
+        "critical": 0
+      },
+      "escalation_warnings": 0,
+      "false_positive_reductions": 0
+    },
+    "hazards": {
+      "fire_events": 5,
+      "smoke_events": 19,
+      "weapon_events": 0
+    },
+    "heatmap_events": 1
+  },
+  "ended_at": "2025-11-12T15:43:13.437382"
+}

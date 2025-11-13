@@ -1392,3 +1392,22 @@ body {
         font-size: var(--font-size-base);
     }
 }
+
+
+/* NEW: escalation banner + conflict badge */
+#escalationBanner {
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-weight: 700;
+    color: white;
+    display: inline-block;
+}
+.escalation-low { background: linear-gradient(90deg,#10b981,#059669); }
+.escalation-mid { background: linear-gradient(90deg,#f59e0b,#f97316); }
+.escalation-high { background: linear-gradient(90deg,#ef4444,#dc2626); }
+
+#conflictTypeBadge { font-weight:700; color:var(--text-primary); background:var(--bg-secondary); border:1px solid var(--border-color); }
+#hazardsList { display:flex;flex-direction:column;gap:8px; }
+.hazard-item { display:flex;align-items:center;gap:8px;padding:6px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid var(--border-color); }
+.hazard-item .h-type { font-weight:700;color:var(--text-secondary); margin-right:6px; }
+.hotspot-item { padding:8px;border-bottom:1px solid var(--border-color); color:var(--text-secondary); font-size:0.95rem; }

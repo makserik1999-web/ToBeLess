@@ -1,0 +1,173 @@
+{
+  "job_id": "ec067d89d4574454ae9831fb70e33d00",
+  "analytics": {
+    "fight": {
+      "total_detections": 1,
+      "strike_count": 69,
+      "fall_count": 0,
+      "fight_events": [
+        {
+          "start_frame": 12,
+          "start_time": "2025-11-12T21:39:10.527409",
+          "confidence": 61.666666666666664
+        }
+      ],
+      "conflict_types": {
+        "minor_scuffle": 0,
+        "active_fight": 0,
+        "group_conflict": 0,
+        "critical": 0
+      },
+      "escalation_warnings": 0,
+      "people_count_history": [
+        {
+          "frame": 1,
+          "count": 2,
+          "timestamp": "2025-11-12T21:38:58.757376"
+        },
+        {
+          "frame": 2,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:01.759060"
+        },
+        {
+          "frame": 3,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:02.679588"
+        },
+        {
+          "frame": 4,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:03.562511"
+        },
+        {
+          "frame": 5,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:04.444489"
+        },
+        {
+          "frame": 6,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:05.278434"
+        },
+        {
+          "frame": 7,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:06.109608"
+        },
+        {
+          "frame": 8,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:07.016036"
+        },
+        {
+          "frame": 9,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:07.944583"
+        },
+        {
+          "frame": 10,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:08.896567"
+        },
+        {
+          "frame": 11,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:09.710389"
+        },
+        {
+          "frame": 12,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:10.525513"
+        },
+        {
+          "frame": 13,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:11.342607"
+        },
+        {
+          "frame": 14,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:12.183401"
+        },
+        {
+          "frame": 15,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:13.027701"
+        },
+        {
+          "frame": 16,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:14.040865"
+        },
+        {
+          "frame": 17,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:15.352445"
+        },
+        {
+          "frame": 18,
+          "count": 3,
+          "timestamp": "2025-11-12T21:39:17.207704"
+        },
+        {
+          "frame": 19,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:18.827197"
+        },
+        {
+          "frame": 20,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:21.151140"
+        },
+        {
+          "frame": 21,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:21.889088"
+        },
+        {
+          "frame": 22,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:24.118537"
+        },
+        {
+          "frame": 23,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:25.105801"
+        },
+        {
+          "frame": 24,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:25.879815"
+        },
+        {
+          "frame": 25,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:27.017753"
+        },
+        {
+          "frame": 26,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:28.022784"
+        },
+        {
+          "frame": 27,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:28.853569"
+        },
+        {
+          "frame": 28,
+          "count": 2,
+          "timestamp": "2025-11-12T21:39:29.671375"
+        }
+      ]
+    },
+    "hazards": {
+      "fire_events": 0,
+      "smoke_events": 16,
+      "weapon_events": 0
+    },
+    "heatmap_events": 16
+  },
+  "ended_at": "2025-11-12T21:39:30.141119"
+}
