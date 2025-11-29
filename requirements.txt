@@ -1,7 +1,29 @@
-Flask==2.3.3
+# --- CORE ---
+torch==2.0.1+cpu
+torchvision==0.15.2+cpu
+torchaudio==2.0.2+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+numpy==1.23.5
+pandas==2.0.3
 opencv-python==4.8.1.78
-ultralytics==8.0.196
-torch==2.0.1
-torchvision==0.15.2
-numpy==1.24.4
-Pillow==10.0.0
+opencv-contrib-python==4.8.1.78
+
+# --- PILLOW (очень важно!) ---
+Pillow==9.5.0
+
+# --- Ultralytics YOLO ---
+ultralytics==8.0.20
+
+# --- Flask + Tools ---
+Flask==2.3.3
+Werkzeug==3.0.6
+Flask-SocketIO==5.5.1
+python-socketio==5.13.0
+python-engineio==4.12.2
+
+# --- Misc ---
+PyYAML==6.0.2
+tqdm==4.67.1
+psutil==7.1.0
+requests==2.32.4
