@@ -53,7 +53,27 @@ class FaceRecognizer:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.face_model_path = face_model_path
-        
+        # optional insightface FaceAnalysis instance and DB for deep embeddings
+        self.fa = None
+        self._insight_db = {}  # name -> list of numpy embedding arrays
+        try:
+            if 'FaceAnalysis' in globals() and FaceAnalysis is not None:
+                try:
+                    # instantiate with defaults; prepare later if needed
+                    self.fa = FaceAnalysis()
+                    try:
+                        # prefer GPU if available (ctx_id=0) else CPU (ctx_id=-1)
+                        ctx_id = 0 if (device is None and ((getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()) or torch.cuda.is_available())) else -1
+                        self.fa.prepare(ctx_id=ctx_id)
+                    except Exception:
+                        # non-fatal if prepare fails; FaceAnalysis can still work in many configs
+                        pass
+                    print(f"[FaceRecognizer] ✓ insightface FaceAnalysis initialized")
+                except Exception as e:
+                    self.fa = None
+                    print(f"[FaceRecognizer] ✗ insightface init failed: {e}")
+        except Exception:
+            self.fa = None
         # Face tracking: temporal consistency to avoid confusing same person
         self.face_tracking = {}  # person_id -> {'name': name, 'conf': score, 'frames': count}
         self.tracking_counter = 0
@@ -160,6 +180,18 @@ class FaceRecognizer:
         if v is None:
             return False, "could not process image"
         self._mem_db.setdefault(name, []).append(v)
+        # if insightface is available, compute and store its embedding as well
+        if self.fa is not None:
+            try:
+                faces = self.fa.get(img_bgr)
+                if faces and len(faces) > 0 and hasattr(faces[0], 'embedding'):
+                    emb = np.array(faces[0].embedding, dtype=np.float32)
+                    n = np.linalg.norm(emb)
+                    if n > 1e-6:
+                        emb = emb / n
+                        self._insight_db.setdefault(name, []).append(emb)
+            except Exception:
+                pass
         # also update self.db for future saving
         self.save_db()
         # optionally save raw image into faces/images
@@ -210,6 +242,24 @@ class FaceRecognizer:
         
         return best_name, best_score
 
+    def _best_match_insight(self, emb):
+        """Compare an insightface embedding against the insight DB (cosine distance).
+        Return (best_name, best_score) or (None, None).
+        """
+        if emb is None:
+            return None, None
+        best_name = None
+        best_score = float('inf')
+        for name, arrs in self._insight_db.items():
+            for ref in arrs:
+                dot = float(np.dot(emb, ref))
+                dot = max(-1.0, min(1.0, dot))
+                cosine_dist = 1.0 - dot
+                if cosine_dist < best_score:
+                    best_score = cosine_dist
+                    best_name = name
+        return best_name, best_score
+
     def identify(self, crop_bgr):
         """Return (name, score) or ('Unknown', None).
         
@@ -221,22 +271,35 @@ class FaceRecognizer:
         # Check face quality before identification
         if not self._check_face_quality(crop_bgr):
             return "Unknown", None
-        
+        # If insightface available and we have insight DB, prefer deep embeddings
+        if self.fa is not None and self._insight_db:
+            try:
+                faces = self.fa.get(crop_bgr)
+                if faces and len(faces) > 0 and hasattr(faces[0], 'embedding'):
+                    emb = np.array(faces[0].embedding, dtype=np.float32)
+                    n = np.linalg.norm(emb)
+                    if n > 1e-6:
+                        emb = emb / n
+                        name, score = self._best_match_insight(emb)
+                        if name is not None and score is not None:
+                            # slightly stricter threshold for deep embeddings
+                            threshold = max(0.32, self.identify_threshold * 0.8)
+                            if score <= threshold:
+                                return name, float(score)
+            except Exception:
+                pass
+
+        # Fallback to lightweight grayscale template matcher
         vec = self._img_to_vector(crop_bgr)
         if vec is None:
             return "Unknown", None
-        
         name, score = self._best_match(vec)
-        
         if name is not None and score is not None:
             # Adaptive threshold: stricter with more templates
             num_templates = len(self._mem_db.get(name, []))
-            # Base threshold adjusted by template count
             threshold = self.identify_threshold * (1.0 - min(0.15, num_templates * 0.01))
-            
             if score <= threshold:
                 return name, float(score)
-        
         return "Unknown", float(score) if score is not None else None
 
     def _compute_iou(self, box1, box2):
@@ -414,10 +477,22 @@ def load_faces_from_folder(face_recognizer: FaceRecognizer, folder_path="faces/i
                 continue
             # create vector and add to memory db (but avoid saving copy)
             v = face_recognizer._img_to_vector(img)
-            if v is None:
-                continue
-            face_recognizer._mem_db.setdefault(name, []).append(v)
-            added += 1
+            if v is not None:
+                face_recognizer._mem_db.setdefault(name, []).append(v)
+                added += 1
+
+            # If insightface is available, also compute deep embedding and store
+            if getattr(face_recognizer, 'fa', None) is not None:
+                try:
+                    faces = face_recognizer.fa.get(img)
+                    if faces and len(faces) > 0 and hasattr(faces[0], 'embedding'):
+                        emb = np.array(faces[0].embedding, dtype=np.float32)
+                        n = np.linalg.norm(emb)
+                        if n > 1e-6:
+                            emb = emb / n
+                            face_recognizer._insight_db.setdefault(name, []).append(emb)
+                except Exception:
+                    pass
         except Exception as e:
             print(f"[load_faces_from_folder] skip {f}: {e}")
     # after loading, write to disk DB
@@ -609,18 +684,11 @@ class FightDetector:
 
     def detect_fight(self, poses, frame_count):
         if len(poses) < 2:
-            return False, [], {'confidence': 0, 'occlusion_filtered': 0}
-        
-        # Filter heavily occluded people (likely not actual persons)
-        filtered_poses = [p for p in poses if not self._is_heavily_occluded(p['keypoints'])]
-        if len(filtered_poses) < 2:
-            return False, [], {'confidence': 0, 'occlusion_filtered': len(poses) - len(filtered_poses)}
-        
-        poses = filtered_poses
+            return False, [], {'body_distances': [], 'limb_crossings': 0, 'close_contacts': 0, 'confidence': 0}
         
         detected = False
         areas = []
-        metrics = {'body_distances': [], 'limb_crossings': 0, 'close_contacts': 0, 'confidence': 0, 'occlusion_filtered': len(poses)}
+        metrics = {'body_distances': [], 'limb_crossings': 0, 'close_contacts': 0, 'confidence': 0}
         
         for i in range(len(poses)):
             for j in range(i + 1, len(poses)):
@@ -706,14 +774,6 @@ class FightDetector:
                         arr[:, 0] *= sx
                         arr[:, 1] *= sy
                     poses.append({'keypoints': arr})
-        
-        # Filter low-confidence poses and smooth keypoints
-        filtered_poses = self._filter_low_confidence_poses(poses, min_conf=self.min_pose_confidence)
-        smooth_poses = []
-        for p in filtered_poses:
-            smoothed_kp = self._smooth_keypoints(p['keypoints'])
-            smooth_poses.append({'keypoints': smoothed_kp})
-        poses = smooth_poses
         
         # ---- Face identification for current frame ----
         identified_names = []
