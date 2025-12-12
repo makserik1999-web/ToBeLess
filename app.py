@@ -2,14 +2,31 @@
 """
 Fight detection with YOLO-pose and automatic face recognition from faces/images folder
 """
+from face_recognizer import FaceRecognizer
+from face_blur import blur_faces
+import cv2
+
+# инициализация (один раз при старте)
+face_rec = FaceRecognizer(yolo_model_path="yolov8n-face.pt", db_path="faces/embeddings.json", debug=True)
+# если DB пустая — автоматически заполнить из faces/images (имена: Alex_1.jpg -> Alex)
+face_rec.bulk_register_from_folder("faces/images")
+face_blur_enabled = False
+face_recognition_enabled = True  # default on
+
 import os, time, uuid, json, threading, traceback
 from pathlib import Path
+try:
+    import face_recognition
+except Exception:
+    face_recognition = None
+    print("[WARNING] 'face_recognition' package not installed. dlib-based recognition disabled.")
+    print("Install with: pip install face_recognition dlib -- or use InsightFace (pip install insightface onnxruntime)")
 from collections import deque
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, Response, send_from_directory
 from werkzeug.utils import secure_filename
 import cv2, numpy as np
-import math
+import math 
 
 try:
     import insightface
@@ -42,479 +59,33 @@ except Exception:
     YOLO = None
 
 # ---------- Replace the old FaceRecognizer with this (put in place of the old class) ----------
-class FaceRecognizer:
-    """
-    Lightweight face recognition:
-    - Uses YOLOv8-face for face DETECTION (if available)
-    - Uses simple grayscale-resize template vectors for IDENTIFICATION (no extra libs)
-    - Templates are stored in faces/embeddings.json as lists of floats per person
-    """
-    def __init__(self, db_path="faces/embeddings.json", face_model_path="yolov8n-face.pt", device=None):
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.face_model_path = face_model_path
-        # optional insightface FaceAnalysis instance and DB for deep embeddings
-        self.fa = None
-        self._insight_db = {}  # name -> list of numpy embedding arrays
-        try:
-            if 'FaceAnalysis' in globals() and FaceAnalysis is not None:
-                try:
-                    # instantiate with defaults; prepare later if needed
-                    self.fa = FaceAnalysis()
-                    try:
-                        # prefer GPU if available (ctx_id=0) else CPU (ctx_id=-1)
-                        ctx_id = 0 if (device is None and ((getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()) or torch.cuda.is_available())) else -1
-                        self.fa.prepare(ctx_id=ctx_id)
-                    except Exception:
-                        # non-fatal if prepare fails; FaceAnalysis can still work in many configs
-                        pass
-                    print(f"[FaceRecognizer] ✓ insightface FaceAnalysis initialized")
-                except Exception as e:
-                    self.fa = None
-                    print(f"[FaceRecognizer] ✗ insightface init failed: {e}")
-        except Exception:
-            self.fa = None
-        # Face tracking: temporal consistency to avoid confusing same person
-        self.face_tracking = {}  # person_id -> {'name': name, 'conf': score, 'frames': count}
-        self.tracking_counter = 0
 
-        # load DB (name -> list of vectors)
-        if self.db_path.exists():
-            try:
-                self.db = json.loads(self.db_path.read_text(encoding='utf-8'))
-                print(f"[FaceRecognizer] Loaded {len(self.db)} persons from DB")
-            except Exception as e:
-                print(f"[FaceRecognizer] Failed to load DB: {e}")
-                self.db = {}
-        else:
-            self.db = {}
-
-        # optional yolov8 face detector
-        self.yolo_face = None
-        try:
-            if 'YOLO' in globals() and YOLO is not None and face_model_path and Path(face_model_path).exists():
-                try:
-                    self.yolo_face = YOLO(face_model_path)
-                    print(f"[FaceRecognizer] ✓ YOLO face model loaded from {face_model_path}")
-                except Exception as e:
-                    print(f"[FaceRecognizer] ✗ Failed to load yolo face model: {e}")
-            else:
-                if face_model_path and not Path(face_model_path).exists():
-                    print(f"[FaceRecognizer] ⚠ YOLO face model not found: {face_model_path}")
-        except Exception as e:
-            print(f"[FaceRecognizer] ✗ YOLO init error: {e}")
-
-        # params for template vectors
-        self.vec_w = 128
-        self.vec_h = 128
-        # identification threshold (L2 / cosine -> we use normalized vectors and cosine distance)
-        self.identify_threshold = 0.45  # smaller = stricter; tune if needed
-
-        # keep names -> list of numpy arrays in memory for speed
-        self._mem_db = {}
-        self._load_mem_db()
-
-    def _img_to_vector(self, img_bgr):
-        """Convert BGR face crop to normalized float vector (unit length)."""
-        try:
-            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-        except Exception:
-            return None
-        # Resize, equalize, convert float
-        try:
-            resized = cv2.resize(gray, (self.vec_w, self.vec_h), interpolation=cv2.INTER_LINEAR)
-        except Exception:
-            return None
-        # equalize to reduce lighting effect
-        resized = cv2.equalizeHist(resized)
-        v = resized.astype(np.float32).reshape(-1)
-        # normalize to unit vector (avoid zero)
-        norm = np.linalg.norm(v)
-        if norm <= 1e-6:
-            return None
-        v = v / norm
-        return v
-
-    def _load_mem_db(self):
-        """Load self.db (lists) into numpy arrays for quick matching."""
-        self._mem_db = {}
-        if not self.db:
-            return
-        for name, lists in self.db.items():
-            arrs = []
-            for vec in lists:
-                try:
-                    a = np.array(vec, dtype=np.float32)
-                    # ensure normalized
-                    n = np.linalg.norm(a)
-                    if n > 1e-6:
-                        a = a / n
-                        arrs.append(a)
-                except Exception:
-                    pass
-            if arrs:
-                self._mem_db[name] = arrs
-        print(f"[FaceRecognizer] Memory DB ready: {len(self._mem_db)} persons")
-
-    def save_db(self):
-        try:
-            # convert numpy to lists
-            dump = {}
-            for name, arrs in self._mem_db.items():
-                dump[name] = [a.tolist() for a in arrs]
-            self.db_path.write_text(json.dumps(dump, ensure_ascii=False, indent=2), encoding='utf-8')
-            # reload plain db as well
-            self.db = dump
-            print(f"[FaceRecognizer] ✓ Saved {len(dump)} persons to DB")
-        except Exception as e:
-            print("[FaceRecognizer] ✗ save_db failed:", e)
-
-    def register_face(self, name, img_bgr, persist_image=True):
-        """
-        Register face crop (BGR numpy) under `name`.
-        If persist_image=True, also save image into faces/images/ as timestamped file.
-        """
-        if img_bgr is None or img_bgr.size == 0:
-            return False, "invalid image"
-        v = self._img_to_vector(img_bgr)
-        if v is None:
-            return False, "could not process image"
-        self._mem_db.setdefault(name, []).append(v)
-        # if insightface is available, compute and store its embedding as well
-        if self.fa is not None:
-            try:
-                faces = self.fa.get(img_bgr)
-                if faces and len(faces) > 0 and hasattr(faces[0], 'embedding'):
-                    emb = np.array(faces[0].embedding, dtype=np.float32)
-                    n = np.linalg.norm(emb)
-                    if n > 1e-6:
-                        emb = emb / n
-                        self._insight_db.setdefault(name, []).append(emb)
-            except Exception:
-                pass
-        # also update self.db for future saving
-        self.save_db()
-        # optionally save raw image into faces/images
-        try:
-            if persist_image:
-                Path("faces/images").mkdir(parents=True, exist_ok=True)
-                fname = Path("faces/images") / f"{name}_{int(time.time())}.jpg"
-                cv2.imwrite(str(fname), img_bgr)
-        except Exception:
-            pass
-        print(f"[FaceRecognizer] ✓ Registered face (name={name})")
-        return True, "registered"
-
-    def _best_match(self, vec):
-        """Return (best_name, best_score) where score is cosine distance (0 = identical).
-        
-        Enhanced matching with:
-        - Multiple reference vector comparison
-        - Weighted confidence based on count of templates
-        - L2 distance as fallback metric
-        """
-        best_name = None
-        best_score = float('inf')
-        if vec is None:
-            return None, None
-        
-        for name, arrs in self._mem_db.items():
-            name_scores = []
-            for ref in arrs:
-                # Cosine distance (normalized vectors)
-                dot = float(np.dot(vec, ref))
-                dot = max(-1.0, min(1.0, dot))
-                cosine_dist = 1.0 - dot
-                name_scores.append(cosine_dist)
-            
-            if name_scores:
-                # Use minimum score (best match) weighted by consistency
-                avg_score = np.mean(name_scores)
-                min_score = np.min(name_scores)
-                std_score = np.std(name_scores) if len(name_scores) > 1 else 0
-                
-                # Penalize high variance (inconsistent templates)
-                weighted_score = min_score + (std_score * 0.05)
-                
-                if weighted_score < best_score:
-                    best_score = weighted_score
-                    best_name = name
-        
-        return best_name, best_score
-
-    def _best_match_insight(self, emb):
-        """Compare an insightface embedding against the insight DB (cosine distance).
-        Return (best_name, best_score) or (None, None).
-        """
-        if emb is None:
-            return None, None
-        best_name = None
-        best_score = float('inf')
-        for name, arrs in self._insight_db.items():
-            for ref in arrs:
-                dot = float(np.dot(emb, ref))
-                dot = max(-1.0, min(1.0, dot))
-                cosine_dist = 1.0 - dot
-                if cosine_dist < best_score:
-                    best_score = cosine_dist
-                    best_name = name
-        return best_name, best_score
-
-    def identify(self, crop_bgr):
-        """Return (name, score) or ('Unknown', None).
-        
-        Enhanced with adaptive threshold based on database size.
-        """
-        if crop_bgr is None or crop_bgr.size == 0:
-            return "Unknown", None
-        
-        # Check face quality before identification
-        if not self._check_face_quality(crop_bgr):
-            return "Unknown", None
-        # If insightface available and we have insight DB, prefer deep embeddings
-        if self.fa is not None and self._insight_db:
-            try:
-                faces = self.fa.get(crop_bgr)
-                if faces and len(faces) > 0 and hasattr(faces[0], 'embedding'):
-                    emb = np.array(faces[0].embedding, dtype=np.float32)
-                    n = np.linalg.norm(emb)
-                    if n > 1e-6:
-                        emb = emb / n
-                        name, score = self._best_match_insight(emb)
-                        if name is not None and score is not None:
-                            # slightly stricter threshold for deep embeddings
-                            threshold = max(0.32, self.identify_threshold * 0.8)
-                            if score <= threshold:
-                                return name, float(score)
-            except Exception:
-                pass
-
-        # Fallback to lightweight grayscale template matcher
-        vec = self._img_to_vector(crop_bgr)
-        if vec is None:
-            return "Unknown", None
-        name, score = self._best_match(vec)
-        if name is not None and score is not None:
-            # Adaptive threshold: stricter with more templates
-            num_templates = len(self._mem_db.get(name, []))
-            threshold = self.identify_threshold * (1.0 - min(0.15, num_templates * 0.01))
-            if score <= threshold:
-                return name, float(score)
-        return "Unknown", float(score) if score is not None else None
-
-    def _compute_iou(self, box1, box2):
-        """Compute IoU between two boxes (x1,y1,x2,y2)."""
-        x1_min, y1_min, x1_max, y1_max = box1[:4]
-        x2_min, y2_min, x2_max, y2_max = box2[:4]
-        
-        ix_min = max(x1_min, x2_min)
-        iy_min = max(y1_min, y2_min)
-        ix_max = min(x1_max, x2_max)
-        iy_max = min(y1_max, y2_max)
-        
-        if ix_max <= ix_min or iy_max <= iy_min:
-            return 0.0
-        
-        inter = (ix_max - ix_min) * (iy_max - iy_min)
-        area1 = (x1_max - x1_min) * (y1_max - y1_min)
-        area2 = (x2_max - x2_min) * (y2_max - y2_min)
-        union = area1 + area2 - inter
-        return inter / union if union > 0 else 0.0
-    
-    def _apply_nms(self, boxes, iou_threshold=0.4):
-        """Apply Non-Maximum Suppression to remove duplicate detections."""
-        if not boxes:
-            return []
-        
-        # Sort by confidence descending
-        boxes = sorted(boxes, key=lambda x: x[4], reverse=True)
-        keep = []
-        
-        for box in boxes:
-            should_keep = True
-            for kept_box in keep:
-                iou = self._compute_iou(box, kept_box)
-                if iou > iou_threshold:
-                    should_keep = False
-                    break
-            if should_keep:
-                keep.append(box)
-        
-        return keep
-    
-    def _check_face_quality(self, crop_bgr, min_size=30):
-        """Check if face crop has acceptable quality (size, blur, lighting, anti-spoofing)."""
-        if crop_bgr is None or crop_bgr.size == 0:
-            return False
-        
-        h, w = crop_bgr.shape[:2]
-        if w < min_size or h < min_size:
-            return False
-        
-        # Check blur using Laplacian variance
-        try:
-            gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-            if laplacian_var < 100:  # Too blurry
-                return False
-        except:
-            pass
-        
-        # Check lighting (image should not be too dark or bright)
-        try:
-            gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-            mean_intensity = gray.mean()
-            if mean_intensity < 30 or mean_intensity > 220:  # Too dark or bright
-                return False
-        except:
-            pass
-        
-        # Anti-spoofing: detect photos/printed faces (flat texture, no depth variation)
-        try:
-            # Check texture frequency content (real faces have more high-freq, photos are flat)
-            gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-            # Compute local standard deviation (texture complexity)
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-            texture_map = cv2.filter2D(gray, cv2.CV_32F, kernel)
-            texture_var = np.var(texture_map)
-            if texture_var < 50:  # Too flat = likely photo
-                return False
-            
-            # Check for excessive saturation (printed photos are over-saturated)
-            hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
-            saturation = hsv[:, :, 1].astype(np.float32)
-            sat_mean = saturation.mean()
-            if sat_mean > 220:  # Over-saturated = likely fake
-                return False
-        except:
-            pass
-        
-        return True
-
-    def detect_faces_yolo(self, frame_bgr, min_conf=0.35):
-        """Detect faces with YOLOv8-face -> returns list of boxes (x1,y1,x2,y2,conf).
-        
-        Improvements:
-        - Higher min_conf threshold for better quality
-        - Non-Maximum Suppression to remove duplicates
-        - Quality checks on detected faces
-        """
-        if self.yolo_face is None:
-            return []
-        try:
-            dets = self.yolo_face(frame_bgr, verbose=False, conf=min_conf)
-            boxes = []
-            
-            for r in dets:
-                if getattr(r, "boxes", None) is None:
-                    continue
-                for box in r.boxes:
-                    conf = float(box.conf[0])
-                    if conf < min_conf:
-                        continue
-                    xyxy = box.xyxy[0].cpu().numpy()
-                    x1, y1, x2, y2 = map(int, xyxy)
-                    
-                    # Clamp to frame
-                    x1 = max(0, x1)
-                    y1 = max(0, y1)
-                    x2 = min(frame_bgr.shape[1]-1, x2)
-                    y2 = min(frame_bgr.shape[0]-1, y2)
-                    
-                    # Check minimum size
-                    if (x2 - x1) < 20 or (y2 - y1) < 20:
-                        continue
-                    
-                    boxes.append((x1, y1, x2, y2, conf))
-            
-            # Apply NMS to remove overlapping detections
-            boxes = self._apply_nms(boxes, iou_threshold=0.4)
-            
-            # Filter by quality
-            quality_boxes = []
-            for box in boxes:
-                x1, y1, x2, y2, conf = box
-                crop = frame_bgr[y1:y2, x1:x2]
-                if self._check_face_quality(crop):
-                    quality_boxes.append(box)
-            
-            return quality_boxes if quality_boxes else boxes  # Fallback to all if none pass quality
-            
-        except Exception as e:
-            print(f"[FaceRecognizer] detect_faces_yolo error: {e}")
-            return []
-
-# ---------- Helper: load faces from faces/images/ into DB ----------
-def load_faces_from_folder(face_recognizer: FaceRecognizer, folder_path="faces/images"):
-    """
-    Load images from faces/images/*.jpg and register them into recognizer.
-    Filenames: Name_anything.jpg -> name 'Name' (split by '_' or first space)
-    This function does NOT duplicate existing templates (it trains in-memory).
-    """
-    p = Path(folder_path)
-    if not p.exists():
-        print(f"[load_faces_from_folder] folder not found: {p}")
+def load_faces_from_folder(face_recognizer, folder_path="faces/images"):
+    """Helper function to load faces from a folder into the recognizer"""
+    if face_recognizer is None:
+        print("[load_faces_from_folder] No face recognizer provided")
         return
-    files = list(p.glob("*.*"))
-    if not files:
-        print("[load_faces_from_folder] no images found")
-        return
-    added = 0
-    for f in files:
-        if f.suffix.lower() not in ('.jpg', '.jpeg', '.png', '.bmp'):
-            continue
-        # derive name
-        name = f.stem
-        # try split by underscore/space to allow "Alex_1.jpg"
-        if "_" in name:
-            name = name.split("_")[0]
-        elif " " in name:
-            name = name.split(" ")[0]
-        # read image
-        try:
-            img = cv2.imread(str(f))
-            if img is None:
-                continue
-            # create vector and add to memory db (but avoid saving copy)
-            v = face_recognizer._img_to_vector(img)
-            if v is not None:
-                face_recognizer._mem_db.setdefault(name, []).append(v)
-                added += 1
-
-            # If insightface is available, also compute deep embedding and store
-            if getattr(face_recognizer, 'fa', None) is not None:
-                try:
-                    faces = face_recognizer.fa.get(img)
-                    if faces and len(faces) > 0 and hasattr(faces[0], 'embedding'):
-                        emb = np.array(faces[0].embedding, dtype=np.float32)
-                        n = np.linalg.norm(emb)
-                        if n > 1e-6:
-                            emb = emb / n
-                            face_recognizer._insight_db.setdefault(name, []).append(emb)
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f"[load_faces_from_folder] skip {f}: {e}")
-    # after loading, write to disk DB
-    face_recognizer.save_db()
-    print(f"[load_faces_from_folder] Added {added} templates to DB")
-
+    try:
+        face_recognizer.bulk_register_from_folder(folder_path)
+        print(f"[load_faces_from_folder] Loaded faces from {folder_path}")
+    except Exception as e:
+        print(f"[load_faces_from_folder] Error: {e}")
 
 
 class FightDetector:
     def __init__(self, model_path="yolov8n-pose.pt", device=None):
         # --- Face recognition init ---
         try:
-            self.face_recognizer = FaceRecognizer(db_path="faces/embeddings.json", face_model_path="yolov8n-face.pt")
+            self.face_rec = FaceRecognizer(
+                yolo_model_path="yolov8n-face.pt",
+                db_path="faces/embeddings.json",
+                debug=True
+            )
         except Exception as e:
             print("[FightDetector] FaceRecognizer init failed:", e)
             self.face_recognizer = None
         self.last_recognition = {}
-        
-        # Pose smoothing: filter out jittery detections
-        self.pose_buffer = deque(maxlen=3)  # Keep last 3 poses for smoothing
-        self.min_pose_confidence = 0.5  # Only accept high-confidence poses
-        
+
         try:
             if device is None:
                 if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
@@ -561,69 +132,6 @@ class FightDetector:
 
     def _dist(self, a, b):
         return float(np.linalg.norm(np.array(a) - np.array(b)))
-    
-    def _smooth_keypoints(self, kp_current):
-        """Smooth keypoints across frames to reduce jitter.
-        Uses exponential moving average of last 3 frames.
-        """
-        if kp_current is None:
-            return kp_current
-        
-        self.pose_buffer.append(kp_current)
-        
-        if len(self.pose_buffer) < 2:
-            return kp_current
-        
-        # Exponential moving average (EMA)
-        smoothed = np.array(kp_current, dtype=np.float32)
-        alpha = 0.6  # Weight for current frame
-        
-        for prev_kp in list(self.pose_buffer)[:-1]:
-            smoothed = alpha * smoothed + (1 - alpha) * np.array(prev_kp, dtype=np.float32)
-            alpha *= 0.4  # Decrease weight for older frames
-        
-        return smoothed.astype(np.float32)
-    
-    def _filter_low_confidence_poses(self, poses, min_conf=0.5):
-        """Filter out poses with low average keypoint confidence.
-        
-        Args:
-            poses: List of pose dicts with 'keypoints' field
-            min_conf: Minimum average confidence threshold
-            
-        Returns:
-            Filtered list of poses
-        """
-        filtered = []
-        for p in poses:
-            if p['keypoints'] is None:
-                continue
-            # Calculate mean confidence of visible keypoints
-            confidences = [kp[2] for kp in p['keypoints'] if kp[2] > 0]
-            if confidences:
-                mean_conf = np.mean(confidences)
-                if mean_conf >= min_conf:
-                    filtered.append(p)
-        return filtered
-    
-    def _count_visible_keypoints(self, kp):
-        """Count keypoints with confidence > 0.3 (visible)."""
-        if kp is None:
-            return 0
-        return sum(1 for k in kp if k[2] > 0.3)
-    
-    def _is_heavily_occluded(self, kp, min_visible=8):
-        """Check if person is heavily occluded (too few visible keypoints).
-        
-        Args:
-            kp: Keypoints array (17 points for COCO-style)
-            min_visible: Minimum visible keypoints needed (default 8 of 17)
-            
-        Returns:
-            True if occluded, False if acceptable
-        """
-        visible_count = self._count_visible_keypoints(kp)
-        return visible_count < min_visible
 
     def get_person_center(self, kp):
         torso = [self.KP['left_shoulder'], self.KP['right_shoulder'], self.KP['left_hip'], self.KP['right_hip']]
@@ -684,12 +192,10 @@ class FightDetector:
 
     def detect_fight(self, poses, frame_count):
         if len(poses) < 2:
-            return False, [], {'body_distances': [], 'limb_crossings': 0, 'close_contacts': 0, 'confidence': 0}
-        
+            return False, [], {'confidence': 0}
         detected = False
         areas = []
         metrics = {'body_distances': [], 'limb_crossings': 0, 'close_contacts': 0, 'confidence': 0}
-        
         for i in range(len(poses)):
             for j in range(i + 1, len(poses)):
                 k1 = poses[i]['keypoints']
@@ -697,18 +203,15 @@ class FightDetector:
                 c1 = self.get_person_center(k1)
                 c2 = self.get_person_center(k2)
                 body_close = False
-                
                 if c1 is not None and c2 is not None:
                     d = self._dist(c1, c2)
                     metrics['body_distances'].append(d)
                     if d < self.body_proximity_threshold:
                         body_close = True
-                
                 crosses = self.check_limb_crossings(k1, k2)
                 metrics['limb_crossings'] += crosses
                 close_contacts, min_limb = self.check_close_limbs(k1, k2)
                 metrics['close_contacts'] += close_contacts
-                
                 if body_close or crosses > 0 or close_contacts > 0:
                     detected = True
                     b1 = self.get_bbox(k1)
@@ -719,7 +222,6 @@ class FightDetector:
                         x2 = max(b1[2], b2[2]) + 20
                         y2 = max(b1[3], b2[3]) + 20
                         areas.append((x1, y1, x2, y2))
-        
         conf = 0.0
         if metrics['body_distances']:
             avg_d = float(np.mean(metrics['body_distances']))
@@ -727,7 +229,6 @@ class FightDetector:
         conf += min(metrics['limb_crossings'] * 20.0, 30.0)
         conf += min(metrics['close_contacts'] * 10.0, 30.0)
         metrics['confidence'] = min(conf, 100.0)
-        
         if detected:
             self.analytics['total_detections'] += 1
             self.analytics['detection_confidence_history'].append({
@@ -735,7 +236,6 @@ class FightDetector:
                 'confidence': metrics['confidence'],
                 'timestamp': datetime.now().isoformat()
             })
-        
         return detected, areas, metrics
 
     def draw_skeleton(self, frame, kps, color=(0, 255, 0)):
@@ -749,7 +249,10 @@ class FightDetector:
                 p2 = (int(kps[b][0]), int(kps[b][1]))
                 cv2.line(frame, p1, p2, color, 2)
 
+
     def process_frame(self, frame, frame_count):
+        global face_blur_enabled, face_recognition_enabled
+        
         proc = frame
         if RESIZE_WIDTH:
             h, w = frame.shape[:2]
@@ -775,230 +278,204 @@ class FightDetector:
                         arr[:, 1] *= sy
                     poses.append({'keypoints': arr})
         
-        # ---- Face identification for current frame ----
+        # ---- Face processing (blur and/or recognition) ----
         identified_names = []
-        face_boxes = []
+        working_frame = frame.copy()
         
-        # Get fast face detections via yolo (if available)
-        if hasattr(self, 'face_recognizer') and self.face_recognizer is not None:
+        # Apply face blur if enabled
+        if face_blur_enabled and hasattr(self, 'face_rec') and self.face_rec is not None:
             try:
-                yolo_face_boxes = self.face_recognizer.detect_faces_yolo(frame)
+                working_frame, blur_results = blur_faces(working_frame, self.face_rec,
+                                                         min_conf=0.5, blur_strength=25, expand=0.1)
+                # If recognition is disabled, just show "Blurred" for all faces
+                if not face_recognition_enabled:
+                    identified_names = ["Blurred"] * len(poses)
+            except Exception as e:
+                print(f"[FightDetector] face blur error: {e}")
+        
+        # Face recognition (only if enabled and blur is off, or we want names despite blur)
+        if face_recognition_enabled and hasattr(self, 'face_rec') and self.face_rec is not None:
+            face_boxes = []
+            
+            # Get YOLO face detections
+            try:
+                yolo_face_boxes = self.face_rec.detect_faces(frame)
             except Exception:
                 yolo_face_boxes = []
-        else:
-            yolo_face_boxes = []
-
-        # For each person, try to find overlapping face box
-        for p in poses:
-            name_for_person = "Unknown"
-            person_bbox = self.get_bbox(p['keypoints'])
-            face_crop = None
-            
-            # 1) Try matching YOLO-face bbox inside person_bbox
-            if person_bbox and yolo_face_boxes:
-                px1, py1, px2, py2 = person_bbox
-                best_box = None
-                best_iou = 0.0
-                
-                for (fx1, fy1, fx2, fy2, conf) in yolo_face_boxes:
-                    # Check center of face inside person bbox
-                    cx = (fx1 + fx2) // 2
-                    cy = (fy1 + fy2) // 2
-                    if cx >= px1 and cx <= px2 and cy >= py1 and cy <= py2:
-                        best_box = (fx1, fy1, fx2, fy2)
-                        break
-                    
-                    # Fallback IoU
-                    ix1 = max(px1, fx1)
-                    iy1 = max(py1, fy1)
-                    ix2 = min(px2, fx2)
-                    iy2 = min(py2, fy2)
-                    iw = max(0, ix2 - ix1)
-                    ih = max(0, iy2 - iy1)
-                    union = (px2 - px1) * (py2 - py1) + (fx2 - fx1) * (fy2 - fy1) - iw * ih
-                    iou = (iw * ih) / union if union > 0 else 0.0
-                    if iou > best_iou:
-                        best_iou = iou
-                        best_box = (fx1, fy1, fx2, fy2)
-                
-                if best_box is not None:
-                    fx1, fy1, fx2, fy2 = best_box
-                    fx1 = max(0, fx1)
-                    fy1 = max(0, fy1)
-                    fx2 = min(frame.shape[1] - 1, fx2)
-                    fy2 = min(frame.shape[0] - 1, fy2)
-                    face_crop = frame[fy1:fy2, fx1:fx2].copy()
-
-            # 2) If no face box found, try approximate head crop from keypoints
-            # IMPROVED: Use multiple facial keypoints for better ROI
-            if face_crop is None and p['keypoints'] is not None:
-                kp = p['keypoints']
-                try:
-                    # Collect confident facial keypoints
-                    facial_points = []
-                    facial_idx_map = {
-                        'nose': 0,
-                        'left_eye': 1, 
-                        'right_eye': 2,
-                        'left_ear': 3,
-                        'right_ear': 4
-                    }
-                    
-                    for name, idx in facial_idx_map.items():
-                        if idx < len(kp) and kp[idx][2] > 0.3:  # Lowered threshold for more robustness
-                            facial_points.append((int(kp[idx][0]), int(kp[idx][1])))
-                    
-                    if facial_points:
-                        # Find bounding box of all facial keypoints
-                        xs = [pt[0] for pt in facial_points]
-                        ys = [pt[1] for pt in facial_points]
-                        
-                        min_x, max_x = min(xs), max(xs)
-                        min_y, max_y = min(ys), max(ys)
-                        
-                        # Expand ROI with adaptive padding
-                        width = max_x - min_x
-                        height = max_y - min_y
-                        
-                        # Adaptive expansion based on detected keypoint area
-                        pad_x = max(int(width * 0.4), 30)
-                        pad_y = max(int(height * 0.5), 40)
-                        
-                        x1 = max(0, min_x - pad_x)
-                        y1 = max(0, min_y - pad_y)
-                        x2 = min(frame.shape[1] - 1, max_x + pad_x)
-                        y2 = min(frame.shape[0] - 1, max_y + pad_y)
-                        
-                        # Ensure minimum face size
-                        if (x2 - x1) >= 30 and (y2 - y1) >= 40:
-                            face_crop = frame[y1:y2, x1:x2].copy()
-                except Exception as e:
-                    print(f"[FightDetector] keypoint-based face crop error: {e}")
-                    face_crop = None
-
-            # 3) Identify using face_recognizer with temporal tracking
-            if face_crop is not None and hasattr(self, 'face_recognizer') and self.face_recognizer is not None:
-                try:
-                    nm, dist = self.face_recognizer.identify(face_crop)
-                    
-                    # TEMPORAL TRACKING: avoid confusing same person detected in consecutive frames
-                    person_id = len(identified_names)  # Current person index
-                    
-                    # If face recognized, check if it's consistent with last frames
-                    if nm is not None and nm != "Unknown":
-                        # Track this identification
-                        if person_id not in self.face_recognizer.face_tracking:
-                            self.face_recognizer.face_tracking[person_id] = {
-                                'name': nm,
-                                'conf': float(dist) if dist else 1.0,
-                                'frames': 1,
-                                'last_frame': frame_count
-                            }
-                        else:
-                            # Update tracking: use EMA for confidence
-                            tracked = self.face_recognizer.face_tracking[person_id]
-                            if tracked['name'] == nm:  # Same person
-                                tracked['frames'] += 1
-                                tracked['conf'] = 0.7 * tracked['conf'] + 0.3 * (float(dist) if dist else 1.0)
-                            else:  # Different name detected - require higher confidence
-                                if float(dist) if dist else 1.0 > 0.35:
-                                    nm = tracked['name']  # Keep previous identification
-                                else:
-                                    tracked['name'] = nm
-                            tracked['last_frame'] = frame_count
-                        
-                        # Clean old tracking entries (not seen for 30 frames)
-                        to_remove = [pid for pid, track in self.face_recognizer.face_tracking.items()
-                                    if frame_count - track['last_frame'] > 30]
-                        for pid in to_remove:
-                            del self.face_recognizer.face_tracking[pid]
-                    
-                    name_for_person = nm
-                    face_boxes.append({'name': nm, 'dist': dist, 'crop_exists': True})
-                    
-                    # If recognized (not Unknown) -> send Telegram once per ALERT_COOLDOWN per name
-                    if nm is not None and nm != "Unknown":
-                        now = time.time()
-                        last = self.last_recognition.get(nm, 0)
-                        if now - last > ALERT_COOLDOWN:
-                            try:
-                                _, buf = cv2.imencode('.jpg', face_crop)
-                                b = buf.tobytes()
-                                send_alert(f"👤 Распознан: {nm} (d={dist:.3f})")
-                                send_photo(b, caption=f"Распознан: {nm}")
-                                self.last_recognition[nm] = now
-                            except Exception as e:
-                                # ignore telegram failures, but don't change fight logic
-                                print("[FightDetector] telegram send error:", e)
-                except Exception as e:
-                    print(f"[FightDetector] face identification error: {e}")
-                    name_for_person = "Unknown"
-            else:
+    
+            for p in poses:
                 name_for_person = "Unknown"
-                face_boxes.append({'name': name_for_person, 'dist': None, 'crop_exists': False})
-
-            identified_names.append(name_for_person)
-
-        self.pose_history.append(poses)
-        self.analytics['people_count_history'].append({
-            'frame': frame_count,
-            'count': int(len(poses)),  # Force integer, no decimals
-            'timestamp': datetime.now().isoformat()
-        })
+                person_bbox = self.get_bbox(p['keypoints'])
+                face_crop = None
+                
+                # Match YOLO face box to person
+                if person_bbox and yolo_face_boxes:
+                    px1, py1, px2, py2 = person_bbox
+                    best_box = None
+                    
+                    for (fx1, fy1, fx2, fy2, conf) in yolo_face_boxes:
+                        cx = (fx1 + fx2) // 2
+                        cy = (fy1 + fy2) // 2
+                        if cx >= px1 and cx <= px2 and cy >= py1 and cy <= py2:
+                            best_box = (fx1, fy1, fx2, fy2)
+                            break
+                        
+                    if best_box is not None:
+                        fx1, fy1, fx2, fy2 = best_box
+                        fx1 = max(0, fx1)
+                        fy1 = max(0, fy1)
+                        fx2 = min(frame.shape[1] - 1, fx2)
+                        fy2 = min(frame.shape[0] - 1, fy2)
+                        face_crop = frame[fy1:fy2, fx1:fx2].copy()
+    
+                # Fallback: crop from keypoints
+                if face_crop is None and p['keypoints'] is not None:
+                    kp = p['keypoints']
+                    try:
+                        facial_points = []
+                        facial_idx_map = {
+                            'nose': 0, 'left_eye': 1, 'right_eye': 2,
+                            'left_ear': 3, 'right_ear': 4
+                        }
+                        
+                        for name, idx in facial_idx_map.items():
+                            if idx < len(kp) and kp[idx][2] > 0.3:
+                                facial_points.append((int(kp[idx][0]), int(kp[idx][1])))
+                        
+                        if facial_points:
+                            xs = [pt[0] for pt in facial_points]
+                            ys = [pt[1] for pt in facial_points]
+                            
+                            min_x, max_x = min(xs), max(xs)
+                            min_y, max_y = min(ys), max(ys)
+                            
+                            width = max_x - min_x
+                            height = max_y - min_y
+                            
+                            pad_x = max(int(width * 0.4), 30)
+                            pad_y = max(int(height * 0.5), 40)
+                            
+                            x1 = max(0, min_x - pad_x)
+                            y1 = max(0, min_y - pad_y)
+                            x2 = min(frame.shape[1] - 1, max_x + pad_x)
+                            y2 = min(frame.shape[0] - 1, max_y + pad_y)
+                            
+                            if (x2 - x1) >= 30 and (y2 - y1) >= 40:
+                                face_crop = frame[y1:y2, x1:x2].copy()
+                    except Exception as e:
+                        print(f"[FightDetector] keypoint-based face crop error: {e}")
+                        face_crop = None
+    
+                # Identify face
+                if face_crop is not None:
+                    try:
+                        nm, dist = self.face_rec.identify(face_crop)
+                        
+                        # Temporal tracking
+                        person_id = len(identified_names)
+                        
+                        if nm is not None and nm != "Unknown":
+                            if not hasattr(self.face_rec, 'face_tracking'):
+                                self.face_rec.face_tracking = {}
+                            
+                            if person_id not in self.face_rec.face_tracking:
+                                self.face_rec.face_tracking[person_id] = {
+                                    'name': nm,
+                                    'conf': float(dist) if dist else 1.0,
+                                    'frames': 1,
+                                    'last_frame': frame_count
+                                }
+                            else:
+                                tracked = self.face_rec.face_tracking[person_id]
+                                if tracked['name'] == nm:
+                                    tracked['frames'] += 1
+                                    tracked['conf'] = 0.7 * tracked['conf'] + 0.3 * (float(dist) if dist else 1.0)
+                                else:
+                                    if float(dist) if dist else 1.0 > 0.35:
+                                        nm = tracked['name']
+                                    else:
+                                        tracked['name'] = nm
+                                tracked['last_frame'] = frame_count
+                            
+                            # Clean old tracking
+                            to_remove = [pid for pid, track in self.face_rec.face_tracking.items()
+                                        if frame_count - track['last_frame'] > 30]
+                            for pid in to_remove:
+                                del self.face_rec.face_tracking[pid]
+                        
+                        name_for_person = nm
+                        face_boxes.append({'name': nm, 'dist': dist, 'crop_exists': True})
+                        
+                        # Telegram alert
+                        if nm is not None and nm != "Unknown":
+                            now = time.time()
+                            last = self.last_recognition.get(nm, 0)
+                            if now - last > ALERT_COOLDOWN:
+                                try:
+                                    _, buf = cv2.imencode('.jpg', face_crop)
+                                    b = buf.tobytes()
+                                    send_alert(f"👤 Распознан: {nm} (d={dist:.3f})")
+                                    send_photo(b, caption=f"Распознан: {nm}")
+                                    self.last_recognition[nm] = now
+                                except Exception as e:
+                                    print("[FightDetector] telegram send error:", e)
+                    except Exception as e:
+                        print(f"[FightDetector] face identification error: {e}")
+                        name_for_person = "Unknown"
+                else:
+                    name_for_person = "Unknown"
+                    face_boxes.append({'name': name_for_person, 'dist': None, 'crop_exists': False})
+    
+                identified_names.append(name_for_person)
+        else:
+            # If recognition disabled, fill with placeholders
+            identified_names = ["—"] * len(poses)
         
-        fight, areas, metrics = self.detect_fight(poses, frame_count)
-        
-        if fight:
+        # Use working_frame (blurred if enabled) for output
+        out = working_frame
+
+        # Detect fight
+        fight_detected, fight_areas, metrics = self.detect_fight(poses, frame_count)
+
+        # Update fight state
+        if fight_detected:
             if not self.fight_detected:
                 self.fight_start_time = frame_count
-                self.analytics['fight_events'].append({
-                    'start_frame': frame_count,
-                    'start_time': datetime.now().isoformat(),
-                    'confidence': metrics.get('confidence', 0)
-                })
             self.fight_detected = True
             self.last_fight_detection = frame_count
         else:
-            if self.fight_detected:
-                frames_since = frame_count - self.fight_start_time
-                frames_last = frame_count - self.last_fight_detection
-                if frames_since >= self.fight_hold_duration and frames_last > 10:
-                    dur_s = frames_since / 30.0
-                    self.analytics['fight_duration_history'].append(dur_s)
-                    if self.analytics['fight_events']:
-                        self.analytics['fight_events'][-1]['duration'] = dur_s
-                    self.fight_detected = False
-        
-        out = frame.copy()
-        
-        # Draw skeletons and names
-        for idx, p in enumerate(poses):
-            color = (0, 0, 255) if self.fight_detected else (0, 255, 0)
-            self.draw_skeleton(out, p['keypoints'], color=color)
-            
-            # Draw name above bbox if available
-            name = identified_names[idx] if idx < len(identified_names) else "Unknown"
-            bbox = self.get_bbox(p['keypoints'])
-            if bbox:
-                x1, y1, x2, y2 = bbox
-                txt = name
-                (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                tx = x1
-                ty = max(10, y1 - 10)
-                cv2.rectangle(out, (tx, ty - th - 6), (tx + tw + 8, ty + 2), (0, 0, 0), -1)
-                cv2.putText(out, txt, (tx + 4, ty - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+            if self.fight_detected and (frame_count - self.last_fight_detection > self.fight_hold_duration):
+                self.fight_detected = False
 
-        if self.fight_detected:
-            dur = (frame_count - self.fight_start_time) / 30.0
-            cv2.putText(out, f"FIGHT DETECTED ({dur:.1f}s)", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3, cv2.LINE_AA)
-            for a in areas:
-                cv2.rectangle(out, (a[0], a[1]), (a[2], a[3]), (0, 0, 255), 3)
-        else:
-            cv2.putText(out, "Normal", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2, cv2.LINE_AA)
-        
-        cv2.putText(out, f"Persons: {len(poses)}", (30, out.shape[0] - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        
+        # Store pose history
+        self.pose_history.append(poses)
+
+        # Draw skeletons on output
+        for p in poses:
+            color = (0, 0, 255) if fight_detected else (0, 255, 0)
+            self.draw_skeleton(out, p['keypoints'], color)
+
+        # Draw fight areas
+        if fight_detected and fight_areas:
+            for (x1, y1, x2, y2) in fight_areas:
+                cv2.rectangle(out, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                cv2.putText(out, "FIGHT!", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+
+        # Draw identified names if available
+        if identified_names:
+            for i, p in enumerate(poses):
+                if i < len(identified_names):
+                    name = identified_names[i]
+                    bbox = self.get_bbox(p['keypoints'])
+                    if bbox and name and name != "—":
+                        x1, y1, x2, y2 = bbox
+                        label = f"{name}"
+                        cv2.putText(out, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+
+        # Add metrics to return
+        metrics['people_count'] = len(poses)
         metrics['people_names'] = identified_names
+
         return out, metrics
 
 
@@ -1201,8 +678,8 @@ def start_stream():
         try:
             detector = FightDetector()
             # Автозагрузка лиц из папки faces/images
-            if hasattr(detector, 'face_recognizer') and detector.face_recognizer:
-                load_faces_from_folder(detector.face_recognizer, folder_path="faces/images")
+            if hasattr(detector, 'face_rec') and detector.face_rec:
+                load_faces_from_folder(detector.face_rec, folder_path="faces/images")
         except Exception as e:
             return jsonify({'success': False, 'error': f'Failed to init detector: {e}'})
     
@@ -1358,7 +835,7 @@ def settings():
 @app.route('/add_face', methods=['POST'])
 def add_face():
     global detector
-    if detector is None or not hasattr(detector, 'face_recognizer') or detector.face_recognizer is None:
+    if detector is None or not hasattr(detector, 'face_rec') or detector.face_rec is None:
         return jsonify({'success': False, 'error': 'face_recognizer not initialized'})
     if 'file' not in request.files or 'name' not in request.form:
         return jsonify({'success': False, 'error': 'provide file and name'})
@@ -1368,7 +845,7 @@ def add_face():
     tmp = UPLOAD_DIR / f"tmp_{int(time.time())}_{secure_filename(f.filename)}"
     f.save(str(tmp))
     img = cv2.imread(str(tmp))
-    ok, msg = detector.face_recognizer.register_face(name, img)
+    ok, msg = detector.face_rec.register_face(name, img)
     try:
         tmp.unlink()
     except Exception:
@@ -1379,18 +856,45 @@ def add_face():
 @app.route('/reload_faces', methods=['POST'])
 def reload_faces():
     global detector
-    if detector is None or not hasattr(detector, 'face_recognizer'):
+    if detector is None or not hasattr(detector, 'face_rec'):
         return jsonify({'success': False, 'error': 'Detector not initialized'})
-    
+
     try:
-        load_faces_from_folder(detector.face_recognizer, folder_path="faces/images")
+        load_faces_from_folder(detector.face_rec, folder_path="faces/images")
         return jsonify({
             'success': True,
-            'database': list(detector.face_recognizer.db.keys()),
-            'count': len(detector.face_recognizer.db)
+            'database': list(detector.face_rec._mem_db.keys()),
+            'count': len(detector.face_rec._mem_db)
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
+
+
+
+@app.route('/toggle_face_blur', methods=['POST'])
+def toggle_face_blur():
+    global face_blur_enabled
+    data = request.get_json(silent=True) or request.form or request.values
+    enabled = data.get('enabled', 'false').lower() == 'true'
+    face_blur_enabled = enabled
+    return jsonify({'success': True, 'face_blur_enabled': face_blur_enabled})
+
+@app.route('/toggle_face_recognition', methods=['POST'])
+def toggle_face_recognition():
+    global face_recognition_enabled
+    data = request.get_json(silent=True) or request.form or request.values
+    enabled = data.get('enabled', 'false').lower() == 'true'
+    face_recognition_enabled = enabled
+    return jsonify({'success': True, 'face_recognition_enabled': face_recognition_enabled})
+
+@app.route('/feature_status', methods=['GET'])
+def feature_status():
+    return jsonify({
+        'success': True,
+        'face_blur_enabled': face_blur_enabled,
+        'face_recognition_enabled': face_recognition_enabled
+    })
+
 
 
 if __name__ == "__main__":
