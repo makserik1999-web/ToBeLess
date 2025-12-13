@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# PyTorch models
+*.pt
+*.pth
+*.onnx
+
+# Uploads and temporary files
+uploads/
+faces/images/
+faces/embeddings.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.avi
+
+# Backup files
+*_old.py
+*_original.py
+pp/
+
+# Local development
+.env
+.env.local

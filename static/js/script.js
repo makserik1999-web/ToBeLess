@@ -2,6 +2,7 @@
 // Extended for: heatmap, escalation warnings, conflict types, hazards, hotspots
 class FDApp {
     constructor(opts={}) {
+        console.log('[FDApp] Initializing application...');
         this.pollIntervalMs = opts.pollIntervalMs || 800;
         this.isStreaming = false;
         this.isAnalyzing = false;
@@ -49,6 +50,9 @@ class FDApp {
 
         // periodic heatmap refresh (only when streaming/has events)
         this.heatmapTimer = setInterval(()=> this.refreshHeatmap(), 2500);
+
+        console.log('[FDApp] Initialization complete');
+        console.log('[FDApp] Start button element:', this.elems.startBtn);
     }
 
     connectSSE() {
@@ -121,6 +125,25 @@ class FDApp {
         if (this.elems.updateSettingsBtn) this.elems.updateSettingsBtn.addEventListener('click', ()=>this.updateSettings());
         if (this.el('clearEvents')) this.el('clearEvents').addEventListener('click', ()=>{ if(this.elems.eventLog) this.elems.eventLog.innerHTML = '<div class="event-placeholder"><p>События пока не зафиксированы</p><small>Система будет автоматически регистрировать все обнаруженные инциденты</small></div>'; });
 
+        // Face recognition and blur buttons
+        const faceRecBtn = this.el('faceRecognitionBtn');
+        const faceBlurBtn = this.el('faceBlurBtn');
+
+        if (faceRecBtn) {
+            faceRecBtn.addEventListener('click', async () => {
+                await this.toggleFaceRecognition(faceRecBtn);
+            });
+        }
+
+        if (faceBlurBtn) {
+            faceBlurBtn.addEventListener('click', async () => {
+                await this.toggleFaceBlur(faceBlurBtn);
+            });
+        }
+
+        // Load initial feature status on page load
+        this.loadFeatureStatus();
+
         // file change -> show local preview
         if (this.elems.fileInput) {
             this.elems.fileInput.addEventListener('change', (e)=>{
@@ -188,8 +211,15 @@ class FDApp {
     }
 
     async start(){
-        if (this.elems.startBtn) { this.elems.startBtn.disabled = true; this.elems.startBtn.innerText = 'Starting…'; }
-            if (this.peopleChart) {
+        console.log('[FDApp] Start button clicked');
+
+        if (this.elems.startBtn) {
+            this.elems.startBtn.disabled = true;
+            this.elems.startBtn.textContent = 'Starting…';
+        }
+
+        // Clear charts
+        if (this.peopleChart) {
             this.peopleData.labels = [];
             this.peopleData.datasets[0].data = [];
             this.peopleChart.update();
@@ -199,14 +229,24 @@ class FDApp {
             this.confData.datasets[0].data = [];
             this.confChart.update();
         }
+
         try {
             const st = this.elems.sourceType ? this.elems.sourceType.value : '0';
+            console.log('[FDApp] Source type:', st);
+
             if (st === 'video') {
-                if (!this.elems.fileInput || !this.elems.fileInput.files || this.elems.fileInput.files.length===0) throw new Error('No file selected');
+                if (!this.elems.fileInput || !this.elems.fileInput.files || this.elems.fileInput.files.length===0) {
+                    throw new Error('No file selected');
+                }
+
                 const fd = new FormData();
                 fd.append('file', this.elems.fileInput.files[0]);
+                console.log('[FDApp] Uploading file:', this.elems.fileInput.files[0].name);
+
                 const resp = await fetch('/start_stream', {method:'POST', body: fd});
                 const j = await this._parseJSON(resp);
+                console.log('[FDApp] Upload response:', j);
+
                 if (!j || !j.success) throw new Error(j && j.error ? j.error : 'Upload failed');
 
                 this.isAnalyzing = true;
@@ -222,8 +262,16 @@ class FDApp {
                 this.showAlert('File uploaded — showing processed stream', 'success', 3500);
             } else {
                 const source = (st === '0') ? '0' : (this.elems.sourceInput && this.elems.sourceInput.value) || '';
-                const resp = await fetch('/start_stream', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({source})});
+                console.log('[FDApp] Starting stream with source:', source);
+
+                const resp = await fetch('/start_stream', {
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({source})
+                });
                 const j = await this._parseJSON(resp);
+                console.log('[FDApp] Stream start response:', j);
+
                 if (!j || !j.success) throw new Error(j && j.error ? j.error : 'Start stream failed');
 
                 this.hideAllVideoElements();
@@ -234,13 +282,17 @@ class FDApp {
                 this.isStreaming = true;
                 if (this.elems.stopBtn) { this.elems.stopBtn.disabled = false; }
                 this.showAlert('Stream started', 'success', 3000);
+                console.log('[FDApp] Stream started successfully');
             }
         } catch (err) {
-            console.error(err);
+            console.error('[FDApp] Start failed:', err);
             this.showAlert('Start failed: '+(err.message||err),'error',8000);
             if (this.elems.stopBtn) this.elems.stopBtn.disabled = true;
         } finally {
-            if (this.elems.startBtn) { this.elems.startBtn.disabled = false; this.elems.startBtn.innerText = '▶️ Start Detection'; }
+            if (this.elems.startBtn) {
+                this.elems.startBtn.disabled = false;
+                this.elems.startBtn.textContent = 'Начать детекцию';
+            }
         }
     }
 
@@ -578,6 +630,100 @@ class FDApp {
         } else {
             el.style.display = 'none';
             el.textContent = '';
+        }
+    }
+
+    async toggleFaceRecognition(btn) {
+        if (!btn) return;
+
+        // Get current state from button text
+        const isCurrentlyOn = btn.textContent.includes('ON');
+        const newState = !isCurrentlyOn;
+
+        try {
+            const resp = await fetch('/toggle_face_recognition', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({enabled: newState ? 'true' : 'false'})
+            });
+            const j = await this._parseJSON(resp);
+            if (j && j.success) {
+                btn.textContent = `Face Recognition: ${newState ? 'ON' : 'OFF'}`;
+                if (newState) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+                this.showAlert(`Face recognition ${newState ? 'enabled' : 'disabled'}`, 'success', 2000);
+            } else {
+                this.showAlert('Failed to toggle face recognition', 'error', 3000);
+            }
+        } catch (err) {
+            console.error('Error toggling face recognition:', err);
+            this.showAlert('Error toggling face recognition', 'error', 3000);
+        }
+    }
+
+    async toggleFaceBlur(btn) {
+        if (!btn) return;
+
+        // Get current state from button text
+        const isCurrentlyOn = btn.textContent.includes('ON');
+        const newState = !isCurrentlyOn;
+
+        try {
+            const resp = await fetch('/toggle_face_blur', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({enabled: newState ? 'true' : 'false'})
+            });
+            const j = await this._parseJSON(resp);
+            if (j && j.success) {
+                btn.textContent = `Face Blur: ${newState ? 'ON' : 'OFF'}`;
+                if (newState) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+                this.showAlert(`Face blur ${newState ? 'enabled' : 'disabled'}`, 'success', 2000);
+            } else {
+                this.showAlert('Failed to toggle face blur', 'error', 3000);
+            }
+        } catch (err) {
+            console.error('Error toggling face blur:', err);
+            this.showAlert('Error toggling face blur', 'error', 3000);
+        }
+    }
+
+    async loadFeatureStatus() {
+        try {
+            const resp = await fetch('/feature_status');
+            const j = await this._parseJSON(resp);
+            if (j && j.success) {
+                const faceRecBtn = this.el('faceRecognitionBtn');
+                const faceBlurBtn = this.el('faceBlurBtn');
+
+                if (faceRecBtn) {
+                    const isEnabled = j.face_recognition_enabled || false;
+                    faceRecBtn.textContent = `Face Recognition: ${isEnabled ? 'ON' : 'OFF'}`;
+                    if (isEnabled) {
+                        faceRecBtn.classList.add('active');
+                    } else {
+                        faceRecBtn.classList.remove('active');
+                    }
+                }
+                if (faceBlurBtn) {
+                    const isEnabled = j.face_blur_enabled || false;
+                    faceBlurBtn.textContent = `Face Blur: ${isEnabled ? 'ON' : 'OFF'}`;
+                    if (isEnabled) {
+                        faceBlurBtn.classList.add('active');
+                    } else {
+                        faceBlurBtn.classList.remove('active');
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn('Failed to load feature status:', err);
         }
     }
 

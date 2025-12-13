@@ -1,177 +1,218 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>AI Fight Detection - Система детекции</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ToBeLess AI - Система детекции</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    /* Custom styles for feature buttons */
+    #faceRecognitionBtn.active {
+      background-color: #10b981;
+      border-color: #10b981;
+    }
+
+    #faceBlurBtn.active {
+      background-color: #10b981;
+      border-color: #10b981;
+    }
+
+    .btn-secondary {
+      background-color: #6b7280;
+      border-color: #6b7280;
+      color: white;
+      transition: all 0.3s ease;
+    }
+
+    .btn-secondary:hover {
+      background-color: #4b5563;
+      border-color: #4b5563;
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <!-- Header Section -->
-        <header class="header-detection">
-            <div class="header-content">
-                <div class="header-left">
-                    <h1>ToBeLess AI</h1>
-                    <p>Система детекции насилия в реальном времени</p>
-                </div>
-                <div class="header-right">
-                    <a href="{{ url_for('index') }}" class="btn btn-back" target="_blank">
-                        ← О проекте
-                    </a>
-                </div>
-            </div>
-        </header>
+  <div class="container">
 
-        <!-- Quick Info Banner -->
-        <div class="info-banner">
-            <div class="info-item">
-                <span>Real-time Processing</span>
-            </div>
-            <div class="info-item">
-                <span>91% Accuracy</span>
-            </div>
-            <div class="info-item">
-                <span>Privacy Protected</span>
-            </div>
+    <!-- Header -->
+    <header class="header-detection">
+      <div class="header-content">
+        <div class="header-left">
+          <h1>ToBeLess AI</h1>
+          <p>Система детекции насилия в реальном времени</p>
         </div>
-
-        <!-- Main Content Grid -->
-        <div class="main-grid">
-            <!-- Video Section -->
-            <section class="video-section card">
-                <div class="video-controls">
-                    <div class="control-group">
-                        <label>Источник:</label>
-                        <select id="sourceType" class="input-field">
-                            <option value="0">Веб-камера</option>
-                            <option value="video">Видео файл</option>
-                            <option value="rtsp">RTSP поток</option>
-                        </select>
-                        <input type="text" id="sourceInput" class="input-field" placeholder="Введите путь или RTSP URL" style="display: none;">
-                        <input type="file" id="fileInput" class="input-field" accept="video/*" style="display: none;">
-                    </div>
-                    
-                    <div class="control-group">
-                        <button class="btn btn-primary" id="startBtn">
-                            Начать детекцию
-                        </button>
-                        <button class="btn btn-danger" id="stopBtn" disabled>
-                            Остановить
-                        </button>
-                    </div>
-                    
-                    <div id="statusAlert" class="alert"></div>
-                </div>
-
-                <div class="video-display">
-                    <div class="video-placeholder" id="videoPlaceholder">
-                        <div class="placeholder-content">
-                            <p>Выберите источник и нажмите "Начать детекцию"</p>
-                            <div class="placeholder-tips">
-                                <div class="tip">Поддержка веб-камеры</div>
-                                <div class="tip">Загрузка видео файлов</div>
-                                <div class="tip">RTSP потоки</div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <img id="videoFeed" alt="Live video feed" style="display: none;">
-                    
-                    <video id="uploadedVideo" controls style="display: none;">
-                        <source id="uploadedVideoSource" src="" type="video/mp4">
-                        Ваш браузер не поддерживает видео.
-                    </video>
-                </div>
-            </section>
-
-            <!-- Status Panel -->
-            <aside class="status-panel">
-                <div class="status-indicator status-normal" id="statusIndicator">
-                    <span>Система готова</span>
-                </div>
-
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-value" id="peopleCount">0</div>
-                        <div class="stat-label">Обнаружено людей</div>
-                    </div>
-                    <div class="stat-card stat-danger">
-                        <div class="stat-value" id="fightCount">0</div>
-                        <div class="stat-label">Обнаружено драк</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="confidence">0%</div>
-                        <div class="stat-label">Уверенность</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="fps">0</div>
-                        <div class="stat-label">Кадры/сек</div>
-                    </div>
-                </div>
-
-                <div class="settings-section card">
-                    <h3>Настройки детекции</h3>
-                    <div class="setting-item">
-                        <label>Близость тел:</label>
-                        <div class="setting-input-group">
-                            <input type="number" id="bodyThreshold" class="input-field" value="120" min="50" max="300">
-                            <span class="setting-unit">px</span>
-                        </div>
-                    </div>
-                    <div class="setting-item">
-                        <label>Близость конечностей:</label>
-                        <div class="setting-input-group">
-                            <input type="number" id="limbThreshold" class="input-field" value="50" min="20" max="150">
-                            <span class="setting-unit">px</span>
-                        </div>
-                    </div>
-                    <div class="setting-item">
-                        <label>Длительность:</label>
-                        <div class="setting-input-group">
-                            <input type="number" id="holdDuration" class="input-field" value="60" min="10" max="200">
-                            <span class="setting-unit">кадры</span>
-                        </div>
-                    </div>
-                    <button class="btn btn-secondary" id="updateSettings">
-                        Применить настройки
-                    </button>
-                </div>
-            </aside>
+        <div class="header-right">
+          <a href="{{ url_for('index') }}" class="btn btn-back" target="_blank">← О проекте</a>
         </div>
+      </div>
+    </header>
 
-        <!-- Charts Section -->
-        <section class="charts-section">
-            <div class="chart-container card">
-                <h3>Количество людей во времени</h3>
-                <div class="chart-wrapper">
-                    <canvas id="peopleChart"></canvas>
-                </div>
-            </div>
-            <div class="chart-container card">
-                <h3>Уверенность детекции</h3>
-                <div class="chart-wrapper">
-                    <canvas id="confidenceChart"></canvas>
-                </div>
-            </div>
-        </section>
-
-        <!-- Events Section -->
-        <section class="events-section card">
-            <div class="events-header">
-                <h3>Последние события</h3>
-                <button class="btn btn-small" id="clearEvents">Очистить</button>
-            </div>
-            <div class="event-log" id="eventLog">
-                <div class="event-placeholder">
-                    <p>События пока не зафиксированы</p>
-                    <small>Система будет автоматически регистрировать все обнаруженные инциденты</small>
-                </div>
-            </div>
-        </section>
+    <!-- Info banner + Escalation -->
+    <div class="info-banner" style="align-items:center;">
+      <div class="info-item"><span>Real-time Processing</span></div>
+      <div class="info-item"><span>91% Accuracy</span></div>
+      <div class="info-item"><span>Privacy Protected</span></div>
+      <div id="escalationBanner" style="margin-left:24px;display:none;"></div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <!-- Main Grid -->
+    <div class="main-grid">
+      <!-- Video Section -->
+      <section class="video-section card">
+        <div class="video-controls">
+          <div class="control-group">
+            <label>Источник:</label>
+            <select id="sourceType" class="input-field">
+              <option value="0">Веб-камера</option>
+              <option value="video">Видео файл</option>
+              <option value="rtsp">RTSP поток</option>
+            </select>
+            <input type="text" id="sourceInput" class="input-field" placeholder="Введите путь или RTSP URL" style="display: none;">
+            <input type="file" id="fileInput" class="input-field" accept="video/*" style="display: none;">
+          </div>
+
+          <div class="control-group">
+            <button class="btn btn-primary" id="startBtn">Начать детекцию</button>
+            <button class="btn btn-danger" id="stopBtn" disabled>Остановить</button>
+            <button class="btn btn-secondary" id="faceRecognitionBtn">Face Recognition: ON</button>
+            <button class="btn btn-secondary" id="faceBlurBtn">Face Blur: OFF</button>
+          </div>
+
+          <div id="statusAlert" class="alert"></div>
+        </div>
+
+        <div class="video-display">
+          <div class="video-placeholder" id="videoPlaceholder">
+            <div class="placeholder-content">
+              <p>Выберите источник и нажмите "Начать детекцию"</p>
+              <div class="placeholder-tips">
+                <div class="tip">Поддержка веб-камеры</div>
+                <div class="tip">Загрузка видео файлов</div>
+                <div class="tip">RTSP потоки</div>
+              </div>
+            </div>
+          </div>
+
+          <img id="videoFeed" alt="Live video feed" style="display: none;">
+          <video id="uploadedVideo" controls style="display: none;">
+            <source id="uploadedVideoSource" src="" type="video/mp4">
+            Ваш браузер не поддерживает видео.
+          </video>
+        </div>
+      </section>
+
+      <!-- Status Panel -->
+      <aside class="status-panel">
+        <div class="status-indicator status-normal" id="statusIndicator">
+          <span>Система готова</span>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value" id="peopleCount">0</div>
+            <div class="stat-label">Обнаружено людей</div>
+          </div>
+          <div class="stat-card stat-danger">
+            <div class="stat-value" id="fightCount">0</div>
+            <div class="stat-label">Обнаружено драк</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="confidence">0%</div>
+            <div class="stat-label">Уверенность</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="fps">0</div>
+            <div class="stat-label">Кадры/сек</div>
+          </div>
+        </div>
+
+        <div style="margin-top:12px;">
+          <div id="conflictTypeBadge" class="stat-card" style="display:flex;align-items:center;justify-content:center;padding:10px;">
+            <div id="conflictTypeText">Тип: —</div>
+          </div>
+        </div>
+
+        <div style="margin-top:12px;">
+          <div class="stat-card" style="padding:12px;">
+            <h4 style="margin-bottom:8px;">Опасности</h4>
+            <div id="hazardsList" style="min-height:40px;color:var(--text-secondary);">Нет</div>
+          </div>
+        </div>
+
+        <div class="settings-section card">
+          <h3>Настройки детекции</h3>
+          <div class="setting-item">
+            <label>Близость тел:</label>
+            <div class="setting-input-group">
+              <input type="number" id="bodyThreshold" class="input-field" value="120" min="50" max="300">
+              <span class="setting-unit">px</span>
+            </div>
+          </div>
+          <div class="setting-item">
+            <label>Близость конечностей:</label>
+            <div class="setting-input-group">
+              <input type="number" id="limbThreshold" class="input-field" value="50" min="20" max="150">
+              <span class="setting-unit">px</span>
+            </div>
+          </div>
+          <div class="setting-item">
+            <label>Длительность:</label>
+            <div class="setting-input-group">
+              <input type="number" id="holdDuration" class="input-field" value="60" min="10" max="200">
+              <span class="setting-unit">кадры</span>
+            </div>
+          </div>
+          <button class="btn btn-secondary" id="updateSettings">Применить настройки</button>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Charts + Heatmap -->
+    <section class="charts-section">
+      <div class="chart-container card">
+        <h3>Количество людей во времени</h3>
+        <div class="chart-wrapper"><canvas id="peopleChart"></canvas></div>
+      </div>
+
+      <div class="chart-container card">
+        <h3>Уверенность детекции</h3>
+        <div class="chart-wrapper"><canvas id="confidenceChart"></canvas></div>
+      </div>
+
+      <div class="chart-container card" style="grid-column: span 2;">
+        <h3>Тепловая карта конфликтов</h3>
+        <div style="display:flex;gap:16px;align-items:flex-start;">
+          <div style="flex:1;">
+            <div style="background:var(--bg-secondary);padding:12px;border-radius:8px;border:1px solid var(--border-color);">
+              <img id="heatmapImg" src="" alt="Heatmap" style="width:100%;height:360px;object-fit:cover;background:#091022;">
+            </div>
+          </div>
+          <div style="width:260px;">
+            <h4>Hotspots</h4>
+            <div id="hotspotsList" style="color:var(--text-secondary);min-height:300px;overflow:auto;padding-right:8px;">Пока пусто</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Events Section -->
+    <section class="events-section card">
+      <div class="events-header">
+        <h3>Последние события</h3>
+        <div>
+          <button class="btn btn-small" id="clearEvents">Очистить</button>
+        </div>
+      </div>
+      <div class="event-log" id="eventLog">
+        <div class="event-placeholder">
+          <p>События пока не зафиксированы</p>
+          <small>Система будет автоматически регистрировать все обнаруженные инциденты</small>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <script src="{{ url_for('static', filename='js/script.js') }}"></script>
 </body>
 </html>

@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nfeat: Improve face detection accuracy and simplify fight detection\n\n- Enhanced face recognition with better detection parameters\n  * Increased confidence threshold: 0.25 → 0.5\n  * Larger embedding size: 112x112 → 128x128\n  * Stricter matching threshold: 0.48 → 0.55\n  * Minimum face size: 16px → 40px\n  * Tighter NMS IoU: 0.4 → 0.3\n\n- Improved preprocessing pipeline\n  * Added face quality checks (blur detection, minimum resolution)\n  * Enhanced CLAHE clip limit: 2.0 → 3.0\n  * Added bilateral filter for edge-preserving smoothing\n  * Switched to INTER_CUBIC interpolation\n  * Added histogram equalization\n\n- Better Haar cascade parameters\n  * Scale factor: 1.05 → 1.1\n  * Min neighbors: 4 → 6\n  * Min size: 30px → 50px\n  * Added histogram equalization preprocessing\n\n- Simplified fight detection algorithm\n  * Removed complex pose smoothing and buffering\n  * Removed occlusion filtering\n  * Streamlined to core metrics (body proximity, limb crossings, contacts)\n  * Cleaner, more maintainable code\n\n- Added CLAUDE.md documentation for future AI assistants\n  * Development commands and setup\n  * Architecture overview and processing pipeline\n  * Configuration parameters and API routes\n  * Code patterns and known issues\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git push)",
+      "WebFetch(domain:tobelesai.figma.site)",
+      "WebFetch(domain:www.figma.com)",
+      "Bash(pip install:*)",
+      "Bash(.venvScriptspython.exe -m pip install flask-cors)",
+      "Bash(python -m pip install:*)",
+      "Bash(ls:*)",
+      "Bash(npm install)",
+      "Bash(npm run build:*)",
+      "Bash(npm install:*)",
+      "Bash(timeout 10 npm run dev)",
+      "Bash(.venv/Scripts/python.exe:*)"
+    ]
+  }
+}

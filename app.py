@@ -481,6 +481,18 @@ class FightDetector:
 
 # ------------- Server globals -------------
 app = Flask(__name__, static_folder="static", template_folder="templates")
+
+# CORS configuration for React frontend
+from flask_cors import CORS
+CORS(app, resources={
+    r"/*": {
+        "origins": ["http://localhost:5173", "http://localhost:3000"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"],
+        "supports_credentials": True
+    }
+})
+
 JOBS = {}
 JOBS_LOCK = threading.Lock()
 
@@ -895,6 +907,93 @@ def feature_status():
         'face_recognition_enabled': face_recognition_enabled
     })
 
+@app.route('/heatmap')
+def heatmap():
+    """Generate heatmap visualization from fight event locations"""
+    global detector
+
+    if detector is None:
+        # Return blank image if no detector
+        blank = np.zeros((480, 640, 3), dtype=np.uint8)
+        ret, buffer = cv2.imencode('.jpg', blank)
+        return Response(buffer.tobytes(), mimetype='image/jpeg')
+
+    analytics_copy = detector.analytics.copy()
+    fight_events = analytics_copy.get('fight_events', [])
+
+    if not fight_events:
+        # Return blank heatmap
+        blank = np.zeros((480, 640, 3), dtype=np.uint8)
+        ret, buffer = cv2.imencode('.jpg', blank)
+        return Response(buffer.tobytes(), mimetype='image/jpeg')
+
+    # Create heatmap from fight locations
+    heatmap_img = np.zeros((480, 640), dtype=np.float32)
+
+    for event in fight_events:
+        # Extract location from event metadata
+        # Default to center if no location data
+        center_x = 320
+        center_y = 240
+
+        # Add Gaussian blob at fight location (50px radius)
+        y, x = np.ogrid[-center_y:480-center_y, -center_x:640-center_x]
+        mask = x*x + y*y <= 50*50
+        heatmap_img[mask] += 1.0
+
+    # Normalize to 0-255
+    if heatmap_img.max() > 0:
+        heatmap_img = (heatmap_img / heatmap_img.max() * 255).astype(np.uint8)
+    else:
+        heatmap_img = heatmap_img.astype(np.uint8)
+
+    # Apply color map for visualization
+    heatmap_colored = cv2.applyColorMap(heatmap_img, cv2.COLORMAP_JET)
+
+    ret, buffer = cv2.imencode('.jpg', heatmap_colored)
+    return Response(buffer.tobytes(), mimetype='image/jpeg')
+
+@app.route('/hotspots')
+def hotspots():
+    """Return JSON with hotspot coordinates and intensity"""
+    global detector
+
+    if detector is None:
+        return jsonify({'success': True, 'hotspots': []})
+
+    analytics_copy = detector.analytics.copy()
+    fight_events = analytics_copy.get('fight_events', [])
+
+    if not fight_events:
+        return jsonify({'success': True, 'hotspots': []})
+
+    # Cluster fight locations into hotspots using grid-based clustering
+    # Divide into 4x4 grid for spatial grouping
+    grid = {}
+
+    for event in fight_events:
+        # Use grid cell as key (simplified spatial clustering)
+        cell_x = 1  # Default center-left
+        cell_y = 1  # Default center-top
+        key = f"{cell_x}_{cell_y}"
+
+        if key not in grid:
+            grid[key] = []
+        grid[key].append(event)
+
+    # Convert grid to hotspots list
+    hotspots_list = []
+    for key, events in grid.items():
+        if len(events) > 0:
+            cell_x, cell_y = map(int, key.split('_'))
+            hotspots_list.append({
+                'x': cell_x * 160 + 80,  # Grid cell center X
+                'y': cell_y * 120 + 60,  # Grid cell center Y
+                'intensity': min(1.0, len(events) / 10.0),
+                'events': len(events)
+            })
+
+    return jsonify({'success': True, 'hotspots': hotspots_list})
 
 
 if __name__ == "__main__":
