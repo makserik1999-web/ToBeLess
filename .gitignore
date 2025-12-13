@@ -40,7 +40,6 @@ Thumbs.db
 # Backup files
 *_old.py
 *_original.py
-pp/
 
 # Local development
 .env
