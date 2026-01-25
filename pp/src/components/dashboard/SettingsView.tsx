@@ -1,6 +1,7 @@
-import { Settings, Bell, Shield, Users, Palette, Globe, Database, Key } from 'lucide-react';
+import { Settings, Bell, Shield, Users, Palette, Globe, Database, Key, Construction } from 'lucide-react';
 import { useState } from 'react';
 import { useTheme } from '../Dashboard';
+import { toast } from 'sonner';
 
 export function SettingsView() {
   const { theme } = useTheme();
@@ -112,7 +113,10 @@ export function SettingsView() {
                   </select>
                 </div>
 
-                <button className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium transition-all">
+                <button
+                  onClick={() => toast.success('Demo mode', { description: 'Settings saved successfully (demo)' })}
+                  className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium transition-all"
+                >
                   Save Changes
                 </button>
               </div>
@@ -161,7 +165,9 @@ export function SettingsView() {
                 Security Settings
               </h2>
               <div className="space-y-4">
-                <button className={`w-full flex items-center justify-between p-4 border rounded-xl transition-all ${
+                <button
+                  onClick={() => toast.info('Coming soon', { description: 'Password management will be available in the next update' })}
+                  className={`w-full flex items-center justify-between p-4 border rounded-xl transition-all ${
                   theme === 'light'
                     ? 'border-purple-200 hover:bg-purple-50'
                     : 'border-zinc-800 hover:bg-zinc-900'
@@ -180,7 +186,9 @@ export function SettingsView() {
                   <span className="text-purple-600">→</span>
                 </button>
 
-                <button className={`w-full flex items-center justify-between p-4 border rounded-xl transition-all ${
+                <button
+                  onClick={() => toast.info('Coming soon', { description: 'Two-factor authentication will be available in the next update' })}
+                  className={`w-full flex items-center justify-between p-4 border rounded-xl transition-all ${
                   theme === 'light'
                     ? 'border-purple-200 hover:bg-purple-50'
                     : 'border-zinc-800 hover:bg-zinc-900'
@@ -199,6 +207,36 @@ export function SettingsView() {
                   <span className="text-purple-600">→</span>
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* Team Tab - Coming Soon */}
+          {activeTab === 'team' && (
+            <div className={`backdrop-blur-xl border rounded-2xl p-12 text-center ${
+              theme === 'light' ? 'bg-white border-purple-200' : 'bg-zinc-950 border-zinc-900'
+            }`}>
+              <Construction className={`w-16 h-16 mx-auto mb-4 ${theme === 'light' ? 'text-purple-300' : 'text-zinc-700'}`} />
+              <h2 className={`text-xl font-semibold mb-2 ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
+                Team Management
+              </h2>
+              <p className={`font-medium ${theme === 'light' ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                Coming soon in the next update
+              </p>
+            </div>
+          )}
+
+          {/* Appearance Tab - Coming Soon */}
+          {activeTab === 'appearance' && (
+            <div className={`backdrop-blur-xl border rounded-2xl p-12 text-center ${
+              theme === 'light' ? 'bg-white border-purple-200' : 'bg-zinc-950 border-zinc-900'
+            }`}>
+              <Construction className={`w-16 h-16 mx-auto mb-4 ${theme === 'light' ? 'text-purple-300' : 'text-zinc-700'}`} />
+              <h2 className={`text-xl font-semibold mb-2 ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
+                Appearance Settings
+              </h2>
+              <p className={`font-medium ${theme === 'light' ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                Coming soon in the next update
+              </p>
             </div>
           )}
         </div>

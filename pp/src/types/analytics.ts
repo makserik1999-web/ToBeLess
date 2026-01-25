@@ -12,11 +12,44 @@ export interface FightEvent {
 export interface StatsSnapshot {
   people: number;
   fights: number;
+  weapons: number;
+  falls: number;
+  screams: number;
   confidence: number;
   fps: number;
   timestamp: string;
   escalation_warning?: boolean;
   conflict_type?: string;
+}
+
+export interface DetectionStatus {
+  success: boolean;
+  fight_detection: boolean;
+  weapon_detection: boolean;
+  fall_detection: boolean;
+  scream_detection: boolean;
+  statistics: {
+    fights: number;
+    weapons: number;
+    falls: number;
+    screams: number;
+  };
+}
+
+export interface ReportResponse {
+  success: boolean;
+  filepath?: string;
+  filename?: string;
+  format?: string;
+  error?: string;
+}
+
+export interface ReportInfo {
+  filename: string;
+  path: string;
+  size: number;
+  created: string;
+  type: string;
 }
 
 export interface Metrics {

@@ -8,6 +8,7 @@ import { IncidentsView } from './dashboard/IncidentsView';
 import { UsersView } from './dashboard/UsersView';
 import { ReportsView } from './dashboard/ReportsView';
 import { SettingsView } from './dashboard/SettingsView';
+import { Toaster } from './ui/sonner';
 
 type Theme = 'light' | 'dark';
 
@@ -79,10 +80,13 @@ export function Dashboard({ onBackToLanding }: DashboardProps) {
             onBackToLanding={onBackToLanding}
           />
           
-          <main className="pt-24 px-6 lg:px-16 max-w-[2000px] mx-auto pb-12">
+          <main className="pt-20 px-6 lg:px-12 max-w-[2000px] mx-auto pb-12">
             {renderView()}
           </main>
         </div>
+
+        {/* Toast notifications */}
+        <Toaster position="bottom-right" theme={theme} />
       </div>
     </ThemeContext.Provider>
   );

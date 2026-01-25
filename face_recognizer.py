@@ -25,12 +25,13 @@ class FaceRecognizer:
       boxes = fr.detect_faces(frame)
       name,score = fr.identify(crop)
     """
-    def __init__(self, yolo_model_path="yolov8n-face.pt", db_path="faces/embeddings.json", dnn_proto=None, dnn_model=None, debug=False, vec_size=(128,128), threshold=0.55):
+    def __init__(self, yolo_model_path="yolov8n-face.pt", db_path="faces/embeddings.json", dnn_proto=None, dnn_model=None, debug=False, vec_size=(128,128), threshold=0.40, min_confidence_gap=0.05):
         self.debug = debug
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.vec_w, self.vec_h = vec_size
         self.threshold = float(threshold)
+        self.min_confidence_gap = float(min_confidence_gap)  # Verification: gap between best and 2nd best
 
         # load YOLO face if available and model exists
         self.yolo = None
@@ -230,6 +231,7 @@ class FaceRecognizer:
         """
         Input: cropped face BGR
         Returns: (name, score) where score is cosine distance (0..2) -> smaller is better (we use 1-dot)
+        Verification: requires both threshold match AND confidence gap from second-best
         """
         if crop_bgr is None or crop_bgr.size == 0:
             return "Unknown", None
@@ -239,6 +241,7 @@ class FaceRecognizer:
 
         best_name = None
         best_score = float("inf")
+        second_best_score = float("inf")
         # Use average distance across all templates for more robust matching
         name_scores = {}
         for name, refs in self._mem_db.items():
@@ -255,12 +258,25 @@ class FaceRecognizer:
                 avg_score = min(scores)
                 name_scores[name] = avg_score
                 if avg_score < best_score:
+                    second_best_score = best_score  # Push previous best to second
                     best_score = avg_score
                     best_name = name
+                elif avg_score < second_best_score:
+                    second_best_score = avg_score
 
+        # Verification layer: require both threshold AND confidence gap
         if best_name is not None and best_score <= self.threshold:
-            if self.debug: print(f"[FaceRecognizer] identify -> {best_name} (score={best_score:.4f})")
-            return best_name, float(best_score)
+            # Check confidence gap (second_best - best should be significant)
+            confidence_gap = second_best_score - best_score
+            if confidence_gap >= self.min_confidence_gap or len(name_scores) == 1:
+                if self.debug:
+                    print(f"[FaceRecognizer] ✓ identify -> {best_name} (score={best_score:.4f}, gap={confidence_gap:.4f})")
+                return best_name, float(best_score)
+            else:
+                if self.debug:
+                    print(f"[FaceRecognizer] ✗ identify -> Unknown (insufficient gap: {confidence_gap:.4f} < {self.min_confidence_gap}, best={best_name})")
+                return "Unknown", (best_score if best_score != float("inf") else None)
+
         if self.debug:
             if best_name is not None:
                 print(f"[FaceRecognizer] identify -> Unknown (best {best_name} score={best_score:.4f}, threshold={self.threshold})")

@@ -2,6 +2,7 @@ import { Users, Search, Plus, Mail, Shield, Calendar, MoreVertical, Edit, Trash2
 import { useState } from 'react';
 import { useTheme } from '../Dashboard';
 import { motion } from 'motion/react';
+import { toast } from 'sonner';
 
 export function UsersView() {
   const { theme } = useTheme();
@@ -123,7 +124,10 @@ export function UsersView() {
             Manage team members and permissions
           </p>
         </div>
-        <button className="flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium transition-all shadow-lg shadow-purple-500/25">
+        <button
+          onClick={() => toast.info('Coming soon', { description: 'User management will be available in the next update' })}
+          className="flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium transition-all shadow-lg shadow-purple-500/25"
+        >
           <Plus className="w-5 h-5" />
           Add User
         </button>
@@ -256,14 +260,18 @@ export function UsersView() {
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-end gap-2">
-                      <button className={`p-2 rounded-lg transition-colors ${
+                      <button
+                        onClick={() => toast.info('Coming soon', { description: 'User editing will be available in the next update' })}
+                        className={`p-2 rounded-lg transition-colors ${
                         theme === 'light'
                           ? 'hover:bg-purple-100 text-zinc-600'
                           : 'hover:bg-zinc-800 text-zinc-400'
                       }`}>
                         <Edit className="w-4 h-4" />
                       </button>
-                      <button className={`p-2 rounded-lg transition-colors ${
+                      <button
+                        onClick={() => toast.info('Coming soon', { description: 'User deletion will be available in the next update' })}
+                        className={`p-2 rounded-lg transition-colors ${
                         theme === 'light'
                           ? 'hover:bg-red-50 text-red-600'
                           : 'hover:bg-red-500/10 text-red-500'

@@ -2,6 +2,7 @@ import { Shield, Search, Filter, Download, MapPin, Clock, User, FileText, AlertT
 import { useState } from 'react';
 import { useTheme } from '../Dashboard';
 import { motion } from 'motion/react';
+import { toast } from 'sonner';
 
 export function IncidentsView() {
   const { theme } = useTheme();
@@ -102,7 +103,9 @@ export function IncidentsView() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button className={`flex items-center gap-2 px-4 py-2 border rounded-xl transition-colors ${
+          <button
+            onClick={() => toast.info('Coming soon', { description: 'Advanced filters will be available in the next update' })}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-xl transition-colors ${
             theme === 'light'
               ? 'bg-white border-purple-200 text-zinc-700 hover:bg-purple-50'
               : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800'
@@ -110,7 +113,9 @@ export function IncidentsView() {
             <Filter className="w-4 h-4" />
             <span className="text-sm font-medium">Filter</span>
           </button>
-          <button className={`flex items-center gap-2 px-4 py-2 border rounded-xl transition-colors ${
+          <button
+            onClick={() => toast.info('Coming soon', { description: 'Export functionality will be available in the next update' })}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-xl transition-colors ${
             theme === 'light'
               ? 'bg-white border-purple-200 text-zinc-700 hover:bg-purple-50'
               : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800'
@@ -306,10 +311,15 @@ export function IncidentsView() {
 
                       {/* Actions */}
                       <div className="flex gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-800">
-                        <button className="flex-1 px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium transition-all">
+                        <button
+                          onClick={() => toast.info('Coming soon', { description: 'Incident report generation will be available in the next update' })}
+                          className="flex-1 px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium transition-all"
+                        >
                           Generate Report
                         </button>
-                        <button className={`px-4 py-3 border rounded-xl font-medium transition-all ${
+                        <button
+                          onClick={() => toast.info('Coming soon', { description: 'Incident editing will be available in the next update' })}
+                          className={`px-4 py-3 border rounded-xl font-medium transition-all ${
                           theme === 'light'
                             ? 'bg-white border-purple-200 text-zinc-700 hover:bg-purple-50'
                             : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800'

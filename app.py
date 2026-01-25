@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """
 Fight detection with YOLO-pose and automatic face recognition from faces/images folder
+Extended with: weapon detection, fall detection, scream detection, and report generation
 """
 from face_recognizer import FaceRecognizer
 from face_blur import blur_faces
+from hybrid_fight_detector import HybridFightDetector
+from weapon_detector import WeaponDetector
+from fall_detector import FallDetector
+from scream_detector import ScreamDetector
+from report_generator import ReportGenerator
 import cv2
 
 # инициализация (один раз при старте)
@@ -22,7 +28,7 @@ except Exception:
     print("[WARNING] 'face_recognition' package not installed. dlib-based recognition disabled.")
     print("Install with: pip install face_recognition dlib -- or use InsightFace (pip install insightface onnxruntime)")
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, render_template, request, jsonify, Response, send_from_directory
 from werkzeug.utils import secure_filename
 import cv2, numpy as np
@@ -39,6 +45,20 @@ try:
 except Exception:
     def send_alert(*a, **k): pass
     def send_photo(*a, **k): pass
+
+try:
+    from openai import OpenAI
+    from dotenv import load_dotenv
+    load_dotenv()
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    if OPENAI_API_KEY:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    else:
+        openai_client = None
+        print("[WARNING] OPENAI_API_KEY not found in environment variables. Chatbot disabled.")
+except Exception as e:
+    openai_client = None
+    print(f"[WARNING] OpenAI not available: {e}")
 
 # ------------ Config ------------
 UPLOAD_DIR = Path("uploads")
@@ -497,6 +517,20 @@ JOBS = {}
 JOBS_LOCK = threading.Lock()
 
 detector = None
+weapon_detector = None
+fall_detector = None
+scream_detector = None
+report_gen = ReportGenerator(output_dir="reports", company_name="ToBeLess AI Security", debug=True)
+
+# Detection toggles
+weapon_detection_enabled = True
+fall_detection_enabled = True
+scream_detection_enabled = False  # Requires microphone, disabled by default
+
+# Event storage for reports
+detection_events = []
+detection_events_lock = threading.Lock()
+
 video_cap = None
 proc_thread = None
 frame_lock = threading.Lock()
@@ -505,9 +539,21 @@ last_annot = None
 stream_active = False
 
 analytics_buffer = deque(maxlen=4000)
-latest_stats = {'people': 0, 'fights': 0, 'fps': 0, 'confidence': 0.0, 'timestamp': None}
+latest_stats = {
+    'people': 0,
+    'fights': 0,
+    'weapons': 0,
+    'falls': 0,
+    'screams': 0,
+    'fps': 0,
+    'confidence': 0.0,
+    'timestamp': None
+}
 latest_stats_lock = threading.Lock()
 last_alert_time = 0
+last_weapon_alert_time = 0
+last_fall_alert_time = 0
+last_scream_alert_time = 0
 
 
 def write_job_result(job_id, payload):
@@ -535,11 +581,20 @@ def _send_alert_nonblocking(text, frame_path=None, caption=None):
 
 # ------------- Processing loop -------------
 def processing_loop(source_is_file=False, job_id=None):
-    global detector, video_cap, current_frame, last_annot, stream_active, last_alert_time
+    global detector, weapon_detector, fall_detector, scream_detector
+    global video_cap, current_frame, last_annot, stream_active
+    global last_alert_time, last_weapon_alert_time, last_fall_alert_time, last_scream_alert_time
+    global detection_events
+
     frame_count = 0
     processed = 0
     t0 = time.time()
-    
+
+    # Detection counters for this session
+    weapon_count = 0
+    fall_count = 0
+    scream_count = 0
+
     try:
         while stream_active and video_cap and video_cap.isOpened():
             ret, frame = video_cap.read()
@@ -548,12 +603,12 @@ def processing_loop(source_is_file=False, job_id=None):
                     break
                 time.sleep(0.02)
                 continue
-            
+
             frame_count += 1
             do_proc = (SKIP_FRAMES <= 1) or (frame_count % SKIP_FRAMES == 0)
             out_frame = None
             metrics = {}
-            
+
             if do_proc:
                 try:
                     out_frame, metrics = detector.process_frame(frame, frame_count)
@@ -561,10 +616,99 @@ def processing_loop(source_is_file=False, job_id=None):
                 except Exception as e:
                     out_frame = frame.copy()
                     metrics = {}
+
+                # Weapon detection
+                if weapon_detector and weapon_detection_enabled:
+                    try:
+                        weapon_detections = weapon_detector.detect(frame)
+                        if weapon_detections:
+                            out_frame = weapon_detector.draw_detections(out_frame, weapon_detections)
+                            weapon_count += len(weapon_detections)
+                            metrics['weapons'] = weapon_detections
+
+                            # Alert for weapons
+                            if time.time() - last_weapon_alert_time > ALERT_COOLDOWN:
+                                for wd in weapon_detections:
+                                    snap = UPLOAD_DIR / f"weapon_{int(time.time())}.jpg"
+                                    cv2.imwrite(str(snap), out_frame)
+                                    txt = f"⚠️ WEAPON DETECTED: {wd['class_name'].upper()} (conf={wd['confidence']:.0%})"
+                                    _send_alert_nonblocking(txt, str(snap), caption=txt)
+
+                                    # Store event for reports
+                                    with detection_events_lock:
+                                        detection_events.append({
+                                            'type': 'weapon',
+                                            'subtype': wd['class_name'],
+                                            'confidence': wd['confidence'],
+                                            'timestamp': datetime.now().isoformat(),
+                                            'details': f"Weapon: {wd['class_name']}, Danger: {wd['danger_level']}"
+                                        })
+
+                                last_weapon_alert_time = time.time()
+                    except Exception as e:
+                        print(f"[Weapon detection error] {e}")
+
+                # Fall detection
+                if fall_detector and fall_detection_enabled:
+                    try:
+                        fall_detections = fall_detector.detect(frame)
+                        if fall_detections:
+                            out_frame = fall_detector.draw_detections(out_frame, fall_detections)
+                            fall_count += len(fall_detections)
+                            metrics['falls'] = fall_detections
+
+                            # Alert for falls
+                            if time.time() - last_fall_alert_time > ALERT_COOLDOWN:
+                                snap = UPLOAD_DIR / f"fall_{int(time.time())}.jpg"
+                                cv2.imwrite(str(snap), out_frame)
+                                txt = f"🚨 FALL DETECTED! Person down - needs assistance"
+                                _send_alert_nonblocking(txt, str(snap), caption=txt)
+
+                                # Store event for reports
+                                with detection_events_lock:
+                                    detection_events.append({
+                                        'type': 'fall',
+                                        'confidence': fall_detections[0].get('confidence', 0.8),
+                                        'timestamp': datetime.now().isoformat(),
+                                        'details': "Person fell - may need assistance"
+                                    })
+
+                                last_fall_alert_time = time.time()
+                    except Exception as e:
+                        print(f"[Fall detection error] {e}")
+
+                # Scream detection (check queue)
+                if scream_detector and scream_detection_enabled:
+                    try:
+                        scream_event = scream_detector.get_detection()
+                        if scream_event:
+                            scream_count += 1
+                            metrics['scream'] = scream_event
+
+                            # Alert for screams
+                            if time.time() - last_scream_alert_time > ALERT_COOLDOWN:
+                                snap = UPLOAD_DIR / f"scream_{int(time.time())}.jpg"
+                                cv2.imwrite(str(snap), out_frame)
+                                txt = f"🔊 SCREAM DETECTED! Volume: {scream_event['volume']:.0%}, Score: {scream_event['score']:.0%}"
+                                _send_alert_nonblocking(txt, str(snap), caption=txt)
+
+                                # Store event for reports
+                                with detection_events_lock:
+                                    detection_events.append({
+                                        'type': 'scream',
+                                        'confidence': scream_event['score'],
+                                        'timestamp': datetime.now().isoformat(),
+                                        'details': f"Volume: {scream_event['volume']:.0%}"
+                                    })
+
+                                last_scream_alert_time = time.time()
+                    except Exception as e:
+                        print(f"[Scream detection error] {e}")
+
             else:
                 out_frame = last_annot.copy() if last_annot is not None else frame.copy()
 
-            # Alerting
+            # Fight alerting
             if detector.fight_detected and (time.time() - last_alert_time > ALERT_COOLDOWN):
                 snap = UPLOAD_DIR / f"alert_{int(time.time())}.jpg"
                 try:
@@ -572,7 +716,7 @@ def processing_loop(source_is_file=False, job_id=None):
                     snap_path = str(snap)
                 except Exception:
                     snap_path = None
-                
+
                 names = metrics.get('people_names', []) or []
                 if names:
                     name_str = ", ".join([n for n in names if n and n != "Unknown"])
@@ -584,6 +728,15 @@ def processing_loop(source_is_file=False, job_id=None):
 
                 _send_alert_nonblocking(txt, snap_path, caption=txt)
                 last_alert_time = time.time()
+
+                # Store fight event for reports
+                with detection_events_lock:
+                    detection_events.append({
+                        'type': 'fight',
+                        'confidence': metrics.get('confidence', 0) / 100 if metrics.get('confidence', 0) > 1 else metrics.get('confidence', 0),
+                        'timestamp': datetime.now().isoformat(),
+                        'details': f"People involved: {len(detector.pose_history[-1]) if detector.pose_history else 0}"
+                    })
 
             with frame_lock:
                 current_frame = out_frame
@@ -616,6 +769,9 @@ def processing_loop(source_is_file=False, job_id=None):
                 with latest_stats_lock:
                     latest_stats['people'] = people
                     latest_stats['fights'] = detector.analytics.get('total_detections', 0)
+                    latest_stats['weapons'] = weapon_detector.stats['total_detections'] if weapon_detector else 0
+                    latest_stats['falls'] = fall_detector.stats['total_falls_detected'] if fall_detector else 0
+                    latest_stats['screams'] = scream_detector.stats['total_screams_detected'] if scream_detector else 0
                     latest_stats['fps'] = fps_est
                     conf = float(metrics.get('confidence', 0.0))
                     if conf <= 0 and detector.analytics.get('detection_confidence_history'):
@@ -684,16 +840,68 @@ def detection():
 
 @app.route('/start_stream', methods=['POST'])
 def start_stream():
-    global detector, video_cap, proc_thread, stream_active
-    
+    global detector, weapon_detector, fall_detector, scream_detector, video_cap, proc_thread, stream_active
+
     if detector is None:
         try:
-            detector = FightDetector()
+            # Create pose detector first
+            pose_detector = FightDetector()
+            # Wrap with hybrid detector (SlowFast + Pose with 85/15 weight balance)
+            detector = HybridFightDetector(
+                pose_detector=pose_detector,
+                device='cuda' if pose_detector.device == 'cuda' else 'cpu',
+                require_both=True,  # Conservative mode: both signals required
+                action_weight=0.85,  # 85% SlowFast, 15% Pose
+                violence_threshold=0.6,  # Stricter threshold
+                inference_interval=8  # Run SlowFast every 8 frames
+            )
             # Автозагрузка лиц из папки faces/images
-            if hasattr(detector, 'face_rec') and detector.face_rec:
-                load_faces_from_folder(detector.face_rec, folder_path="faces/images")
+            if hasattr(pose_detector, 'face_rec') and pose_detector.face_rec:
+                load_faces_from_folder(pose_detector.face_rec, folder_path="faces/images")
         except Exception as e:
             return jsonify({'success': False, 'error': f'Failed to init detector: {e}'})
+
+    # Initialize weapon detector
+    if weapon_detector is None and weapon_detection_enabled:
+        try:
+            weapon_detector = WeaponDetector(
+                model_path="yolov8n.pt",
+                confidence_threshold=0.5,
+                device='cuda' if detector and hasattr(detector, 'device') else 'cpu',
+                debug=True
+            )
+            print("[App] ✓ Weapon detector initialized")
+        except Exception as e:
+            print(f"[App] Weapon detector init failed: {e}")
+
+    # Initialize fall detector
+    if fall_detector is None and fall_detection_enabled:
+        try:
+            fall_detector = FallDetector(
+                model_path="yolov8n-pose.pt",
+                fall_angle_threshold=45.0,
+                confirmation_frames=5,
+                device='cuda' if detector and hasattr(detector, 'device') else 'cpu',
+                debug=True
+            )
+            print("[App] ✓ Fall detector initialized")
+        except Exception as e:
+            print(f"[App] Fall detector init failed: {e}")
+
+    # Initialize scream detector (if enabled)
+    if scream_detector is None and scream_detection_enabled:
+        try:
+            scream_detector = ScreamDetector(
+                volume_threshold=0.3,
+                cooldown_seconds=2.0,
+                debug=True
+            )
+            if scream_detector.start():
+                print("[App] ✓ Scream detector initialized and started")
+            else:
+                print("[App] Scream detector failed to start (no microphone?)")
+        except Exception as e:
+            print(f"[App] Scream detector init failed: {e}")
     
     source_is_file = False
     job_id = None
@@ -739,7 +947,17 @@ def start_stream():
             video_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:
             pass
-        
+
+        # Reset detector stats for fresh start
+        if detector:
+            detector.reset_statistics()
+        if weapon_detector:
+            weapon_detector.stats = {'total_detections': 0}
+        if fall_detector:
+            fall_detector.stats = {'total_falls_detected': 0}
+        if scream_detector:
+            scream_detector.stats = {'total_screams_detected': 0}
+
         stream_active = True
         proc_thread = threading.Thread(target=processing_loop, args=(source_is_file, job_id), daemon=True)
         proc_thread.start()
@@ -751,7 +969,7 @@ def start_stream():
 
 @app.route('/stop_stream', methods=['POST'])
 def stop_stream():
-    global stream_active, proc_thread, video_cap
+    global stream_active, proc_thread, video_cap, current_frame, latest_stats
     stream_active = False
     if proc_thread and proc_thread.is_alive():
         proc_thread.join(timeout=1.0)
@@ -760,6 +978,18 @@ def stop_stream():
             video_cap.release()
     except Exception:
         pass
+
+    # Clear the current frame so old video doesn't persist
+    with frame_lock:
+        current_frame = None
+
+    # Reset stats
+    with latest_stats_lock:
+        latest_stats = {
+            'people': 0, 'fights': 0, 'weapons': 0, 'falls': 0, 'screams': 0,
+            'fps': 0, 'confidence': 0, 'timestamp': None
+        }
+
     return jsonify({'success': True})
 
 
@@ -847,17 +1077,19 @@ def settings():
 @app.route('/add_face', methods=['POST'])
 def add_face():
     global detector
-    if detector is None or not hasattr(detector, 'face_rec') or detector.face_rec is None:
+    # Access face_rec through pose_detector since we're using HybridFightDetector
+    face_rec = detector.pose_detector.face_rec if hasattr(detector, 'pose_detector') else getattr(detector, 'face_rec', None)
+    if detector is None or face_rec is None:
         return jsonify({'success': False, 'error': 'face_recognizer not initialized'})
     if 'file' not in request.files or 'name' not in request.form:
         return jsonify({'success': False, 'error': 'provide file and name'})
-    
+
     f = request.files['file']
     name = request.form['name']
     tmp = UPLOAD_DIR / f"tmp_{int(time.time())}_{secure_filename(f.filename)}"
     f.save(str(tmp))
     img = cv2.imread(str(tmp))
-    ok, msg = detector.face_rec.register_face(name, img)
+    ok, msg = face_rec.register_face(name, img)
     try:
         tmp.unlink()
     except Exception:
@@ -868,15 +1100,17 @@ def add_face():
 @app.route('/reload_faces', methods=['POST'])
 def reload_faces():
     global detector
-    if detector is None or not hasattr(detector, 'face_rec'):
+    # Access face_rec through pose_detector since we're using HybridFightDetector
+    face_rec = detector.pose_detector.face_rec if hasattr(detector, 'pose_detector') else getattr(detector, 'face_rec', None)
+    if detector is None or face_rec is None:
         return jsonify({'success': False, 'error': 'Detector not initialized'})
 
     try:
-        load_faces_from_folder(detector.face_rec, folder_path="faces/images")
+        load_faces_from_folder(face_rec, folder_path="faces/images")
         return jsonify({
             'success': True,
-            'database': list(detector.face_rec._mem_db.keys()),
-            'count': len(detector.face_rec._mem_db)
+            'database': list(face_rec._mem_db.keys()),
+            'count': len(face_rec._mem_db)
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -994,6 +1228,237 @@ def hotspots():
             })
 
     return jsonify({'success': True, 'hotspots': hotspots_list})
+
+# ============ Chatbot Routes ============
+@app.route('/chatbot')
+def chatbot_page():
+    """Render chatbot page"""
+    return render_template('chatbot.html')
+
+@app.route('/chatbot/send', methods=['POST'])
+def chatbot_send():
+    """Handle chatbot message and get AI response"""
+    if openai_client is None:
+        return jsonify({
+            'success': False,
+            'error': 'Chatbot service is not configured. Please set OPENAI_API_KEY in environment variables.'
+        })
+
+    try:
+        data = request.get_json()
+        user_message = data.get('message', '').strip()
+        history = data.get('history', [])
+
+        if not user_message:
+            return jsonify({'success': False, 'error': 'Message is empty'})
+
+        # Build conversation messages for OpenAI
+        messages = [
+            {
+                "role": "system",
+                "content": """You are a Safety Assistant AI for ToBeLess, a violence detection and prevention system.
+Your role is to:
+- Provide helpful information about violence prevention strategies
+- Explain safety best practices in various environments (schools, workplaces, public spaces)
+- Discuss de-escalation techniques
+- Offer guidance on security measures and emergency response
+- Answer questions about the ToBeLess AI detection system
+- Provide educational information about conflict resolution
+
+Be professional, empathetic, and focused on safety and prevention.
+If asked about harmful activities, redirect to constructive safety solutions.
+Keep responses concise and actionable."""
+            }
+        ]
+
+        # Add conversation history (limit to last 10 messages to manage context)
+        for msg in history[-10:]:
+            messages.append({
+                "role": msg.get('role', 'user'),
+                "content": msg.get('content', '')
+            })
+
+        # Get response from OpenAI
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            max_tokens=500,
+            temperature=0.7
+        )
+
+        assistant_message = response.choices[0].message.content
+
+        return jsonify({
+            'success': True,
+            'response': assistant_message
+        })
+
+    except Exception as e:
+        print(f"[Chatbot Error] {e}")
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Failed to get response: {str(e)}'
+        })
+
+
+# ============ Report Generation Endpoints ============
+
+@app.route('/generate_report', methods=['POST'])
+def generate_report():
+    """Generate a security report (PDF, Excel, or JSON)"""
+    global detection_events, report_gen
+
+    data = request.get_json(silent=True) or {}
+    report_format = data.get('format', 'pdf').lower()
+
+    # Collect statistics
+    stats = {
+        'fight_detections': detector.analytics.get('total_detections', 0) if detector else 0,
+        'weapon_detections': weapon_detector.stats['total_detections'] if weapon_detector else 0,
+        'fall_detections': fall_detector.stats['total_falls_detected'] if fall_detector else 0,
+        'scream_detections': scream_detector.stats['total_screams_detected'] if scream_detector else 0
+    }
+
+    # Get events
+    with detection_events_lock:
+        events = detection_events.copy()
+
+    try:
+        if report_format == 'excel':
+            filepath = report_gen.generate_excel_report(
+                events=events,
+                statistics=stats,
+                start_time=datetime.now() - timedelta(hours=24),
+                end_time=datetime.now()
+            )
+        elif report_format == 'json':
+            filepath = report_gen.generate_json_report(
+                events=events,
+                statistics=stats,
+                start_time=datetime.now() - timedelta(hours=24),
+                end_time=datetime.now()
+            )
+        else:  # PDF
+            filepath = report_gen.generate_pdf_report(
+                events=events,
+                statistics=stats,
+                start_time=datetime.now() - timedelta(hours=24),
+                end_time=datetime.now()
+            )
+
+        if filepath:
+            return jsonify({
+                'success': True,
+                'filepath': filepath,
+                'filename': Path(filepath).name,
+                'format': report_format
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': f'Failed to generate {report_format.upper()} report. Check if required packages are installed.'
+            })
+
+    except Exception as e:
+        print(f"[Report Error] {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/download_report/<filename>')
+def download_report(filename):
+    """Download a generated report"""
+    reports_dir = Path("reports")
+    filepath = reports_dir / secure_filename(filename)
+
+    if filepath.exists():
+        return send_from_directory(str(reports_dir), filename, as_attachment=True)
+    else:
+        return jsonify({'success': False, 'error': 'Report not found'}), 404
+
+
+@app.route('/list_reports')
+def list_reports():
+    """List available reports"""
+    reports = report_gen.get_available_reports()
+    return jsonify({'success': True, 'reports': reports})
+
+
+@app.route('/detection_events')
+def get_detection_events():
+    """Get all stored detection events"""
+    with detection_events_lock:
+        events = detection_events.copy()
+    return jsonify({'success': True, 'events': events, 'count': len(events)})
+
+
+@app.route('/clear_events', methods=['POST'])
+def clear_events():
+    """Clear all stored detection events"""
+    global detection_events
+    with detection_events_lock:
+        detection_events = []
+    return jsonify({'success': True, 'message': 'Events cleared'})
+
+
+# ============ Detection Toggle Endpoints ============
+
+@app.route('/toggle_weapon_detection', methods=['POST'])
+def toggle_weapon_detection():
+    """Toggle weapon detection on/off"""
+    global weapon_detection_enabled
+    weapon_detection_enabled = not weapon_detection_enabled
+    return jsonify({
+        'success': True,
+        'weapon_detection_enabled': weapon_detection_enabled
+    })
+
+
+@app.route('/toggle_fall_detection', methods=['POST'])
+def toggle_fall_detection():
+    """Toggle fall detection on/off"""
+    global fall_detection_enabled
+    fall_detection_enabled = not fall_detection_enabled
+    return jsonify({
+        'success': True,
+        'fall_detection_enabled': fall_detection_enabled
+    })
+
+
+@app.route('/toggle_scream_detection', methods=['POST'])
+def toggle_scream_detection():
+    """Toggle scream detection on/off"""
+    global scream_detection_enabled, scream_detector
+    scream_detection_enabled = not scream_detection_enabled
+
+    # Start/stop the scream detector
+    if scream_detection_enabled and scream_detector:
+        scream_detector.start()
+    elif scream_detector:
+        scream_detector.stop()
+
+    return jsonify({
+        'success': True,
+        'scream_detection_enabled': scream_detection_enabled
+    })
+
+
+@app.route('/detection_status')
+def detection_status():
+    """Get status of all detection modules"""
+    return jsonify({
+        'success': True,
+        'fight_detection': True,  # Always enabled
+        'weapon_detection': weapon_detection_enabled,
+        'fall_detection': fall_detection_enabled,
+        'scream_detection': scream_detection_enabled,
+        'statistics': {
+            'fights': detector.analytics.get('total_detections', 0) if detector else 0,
+            'weapons': weapon_detector.stats['total_detections'] if weapon_detector else 0,
+            'falls': fall_detector.stats['total_falls_detected'] if fall_detector else 0,
+            'screams': scream_detector.stats['total_screams_detected'] if scream_detector else 0
+        }
+    })
 
 
 if __name__ == "__main__":

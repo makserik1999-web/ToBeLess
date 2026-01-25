@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useTheme } from '../Dashboard';
 import { motion } from 'motion/react';
+import { toast } from 'sonner';
 
 export function Analytics() {
   const { theme } = useTheme();
@@ -77,7 +78,9 @@ export function Analytics() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button className={`flex items-center gap-2 px-4 py-2 border rounded-xl transition-colors ${
+          <button
+            onClick={() => toast.info('Coming soon', { description: 'Advanced filters will be available in the next update' })}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-xl transition-colors ${
             theme === 'light'
               ? 'bg-white border-purple-200 text-zinc-700 hover:bg-purple-50'
               : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800'
@@ -85,7 +88,9 @@ export function Analytics() {
             <Filter className="w-4 h-4" />
             <span className="text-sm font-medium">Filter</span>
           </button>
-          <button className={`flex items-center gap-2 px-4 py-2 border rounded-xl transition-colors ${
+          <button
+            onClick={() => toast.info('Coming soon', { description: 'Export functionality will be available in the next update' })}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-xl transition-colors ${
             theme === 'light'
               ? 'bg-white border-purple-200 text-zinc-700 hover:bg-purple-50'
               : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800'
@@ -101,7 +106,10 @@ export function Analytics() {
         {['7d', '30d', '90d', '1y'].map((range) => (
           <button
             key={range}
-            onClick={() => setTimeRange(range)}
+            onClick={() => {
+              setTimeRange(range);
+              toast.info('Demo mode', { description: 'Live data filtering coming soon' });
+            }}
             className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
               timeRange === range
                 ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/25'

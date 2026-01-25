@@ -1,72 +1,70 @@
-import { FileText, Download, Calendar, Filter, TrendingUp, Plus } from 'lucide-react';
-import { useState } from 'react';
+import { FileText, Download, Calendar, FolderOpen, Loader2, RefreshCw } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { useTheme } from '../Dashboard';
 import { motion } from 'motion/react';
+import { detectionApi } from '../../api/detection';
+import { ReportInfo } from '../../types/analytics';
+import { toast } from 'sonner';
 
 export function ReportsView() {
   const { theme } = useTheme();
-  const [reportType, setReportType] = useState('all');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatingFormat, setGeneratingFormat] = useState<string | null>(null);
+  const [realReports, setRealReports] = useState<ReportInfo[]>([]);
+  const [isLoadingReports, setIsLoadingReports] = useState(true);
 
-  const reports = [
-    {
-      id: 1,
-      title: 'Monthly Security Summary - November 2024',
-      type: 'monthly',
-      date: '2024-11-30',
-      size: '2.4 MB',
-      description: 'Comprehensive overview of all security incidents and detections for November',
-      downloads: 45
-    },
-    {
-      id: 2,
-      title: 'Incident Response Analysis - Q4 2024',
-      type: 'quarterly',
-      date: '2024-12-01',
-      size: '5.1 MB',
-      description: 'Detailed analysis of incident response times and effectiveness',
-      downloads: 32
-    },
-    {
-      id: 3,
-      title: 'Weekly Detection Report - Week 49',
-      type: 'weekly',
-      date: '2024-12-08',
-      size: '856 KB',
-      description: 'All AI detections from December 2-8, 2024',
-      downloads: 78
-    },
-    {
-      id: 4,
-      title: 'Annual Security Review 2024',
-      type: 'annual',
-      date: '2024-12-10',
-      size: '12.3 MB',
-      description: 'Complete security review and statistics for 2024',
-      downloads: 12
-    },
-    {
-      id: 5,
-      title: 'Custom Report - Building A Analysis',
-      type: 'custom',
-      date: '2024-12-09',
-      size: '1.8 MB',
-      description: 'Focused analysis on Building A security metrics',
-      downloads: 23
-    },
-  ];
+  // Load real reports on mount
+  const loadReports = async () => {
+    setIsLoadingReports(true);
+    try {
+      const result = await detectionApi.listReports();
+      if (result.success) {
+        setRealReports(result.reports);
+      }
+    } catch (err) {
+      // Backend might not be running
+      setRealReports([]);
+    } finally {
+      setIsLoadingReports(false);
+    }
+  };
 
-  const filteredReports = reports.filter(report => {
-    if (reportType !== 'all' && report.type !== reportType) return false;
-    return true;
-  });
+  useEffect(() => {
+    loadReports();
+  }, []);
 
-  const reportTypes = [
-    { id: 'all', label: 'All Reports', count: reports.length },
-    { id: 'weekly', label: 'Weekly', count: reports.filter(r => r.type === 'weekly').length },
-    { id: 'monthly', label: 'Monthly', count: reports.filter(r => r.type === 'monthly').length },
-    { id: 'quarterly', label: 'Quarterly', count: reports.filter(r => r.type === 'quarterly').length },
-    { id: 'annual', label: 'Annual', count: reports.filter(r => r.type === 'annual').length },
-    { id: 'custom', label: 'Custom', count: reports.filter(r => r.type === 'custom').length },
+  // Generate report function
+  const handleGenerateReport = async (format: 'pdf' | 'excel' | 'json') => {
+    setIsGenerating(true);
+    setGeneratingFormat(format);
+    try {
+      const result = await detectionApi.generateReport(format);
+      if (result.success && result.filename) {
+        toast.success('Report generated', { description: `${result.filename} is ready for download` });
+        // Download the file
+        window.open(detectionApi.getReportDownloadUrl(result.filename), '_blank');
+        // Refresh the reports list
+        await loadReports();
+      } else {
+        toast.error('Generation failed', { description: result.error || 'Unknown error' });
+      }
+    } catch (err) {
+      toast.error('Connection error', { description: 'Make sure the backend is running (python app.py)' });
+    } finally {
+      setIsGenerating(false);
+      setGeneratingFormat(null);
+    }
+  };
+
+  // Handle download of existing report
+  const handleDownloadReport = (filename: string) => {
+    window.open(detectionApi.getReportDownloadUrl(filename), '_blank');
+  };
+
+  const reportTemplates = [
+    { name: 'PDF Report', format: 'pdf' as const, color: 'red', description: 'Professional PDF with charts and statistics' },
+    { name: 'Excel Report', format: 'excel' as const, color: 'green', description: 'Spreadsheet with raw data for analysis' },
+    { name: 'JSON Export', format: 'json' as const, color: 'blue', description: 'Machine-readable data export' },
   ];
 
   return (
@@ -75,74 +73,90 @@ export function ReportsView() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className={`text-3xl mb-1 font-semibold ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
-            Reports & Analytics
+            Reports
           </h1>
           <p className={`font-medium ${theme === 'light' ? 'text-zinc-600' : 'text-zinc-400'}`}>
-            Generate and download security reports
+            Generate and download detection reports
           </p>
         </div>
-        <button className="flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium transition-all shadow-lg shadow-purple-500/25">
-          <Plus className="w-5 h-5" />
-          Create Custom Report
+        <button
+          onClick={loadReports}
+          disabled={isLoadingReports}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-colors ${
+            theme === 'light'
+              ? 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+              : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+          }`}
+        >
+          <RefreshCw className={`w-4 h-4 ${isLoadingReports ? 'animate-spin' : ''}`} />
+          Refresh
         </button>
       </div>
 
-      {/* Report Type Filter */}
-      <div className="flex flex-wrap gap-2">
-        {reportTypes.map((type) => (
-          <button
-            key={type.id}
-            onClick={() => setReportType(type.id)}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
-              reportType === type.id
-                ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/25'
-                : theme === 'light'
-                ? 'bg-white border border-purple-200 text-zinc-700 hover:bg-purple-50'
-                : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:bg-zinc-800'
-            }`}
-          >
-            {type.label}
-            <span className={`ml-2 px-2 py-0.5 rounded-full text-xs ${
-              reportType === type.id
-                ? 'bg-purple-700'
-                : theme === 'light'
-                ? 'bg-purple-100 text-purple-700'
-                : 'bg-zinc-800 text-zinc-400'
-            }`}>
-              {type.count}
-            </span>
-          </button>
-        ))}
+      {/* Generate Report Section */}
+      <div className={`backdrop-blur-xl border rounded-2xl p-6 ${
+        theme === 'light' ? 'bg-white border-purple-200' : 'bg-zinc-950 border-zinc-900'
+      }`}>
+        <h2 className={`text-xl font-semibold mb-4 ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
+          Generate New Report
+        </h2>
+        <p className={`mb-6 ${theme === 'light' ? 'text-zinc-600' : 'text-zinc-400'}`}>
+          Generate a report from the current detection session. Make sure a video stream is running for best results.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {reportTemplates.map((template) => (
+            <motion.button
+              key={template.format}
+              onClick={() => handleGenerateReport(template.format)}
+              disabled={isGenerating}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              className={`p-6 rounded-xl border text-left transition-all ${
+                theme === 'light'
+                  ? 'border-purple-200 hover:border-purple-400 hover:shadow-lg'
+                  : 'border-zinc-800 hover:border-zinc-700'
+              } ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className={`w-12 h-12 rounded-xl mb-4 flex items-center justify-center ${
+                template.color === 'red' ? 'bg-red-500/10' :
+                template.color === 'green' ? 'bg-green-500/10' : 'bg-blue-500/10'
+              }`}>
+                {generatingFormat === template.format ? (
+                  <Loader2 className={`w-6 h-6 animate-spin ${
+                    template.color === 'red' ? 'text-red-500' :
+                    template.color === 'green' ? 'text-green-500' : 'text-blue-500'
+                  }`} />
+                ) : (
+                  <FileText className={`w-6 h-6 ${
+                    template.color === 'red' ? 'text-red-500' :
+                    template.color === 'green' ? 'text-green-500' : 'text-blue-500'
+                  }`} />
+                )}
+              </div>
+              <h3 className={`font-semibold mb-1 ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
+                {template.name}
+              </h3>
+              <p className={`text-sm ${theme === 'light' ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                {template.description}
+              </p>
+            </motion.button>
+          ))}
+        </div>
       </div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className={`backdrop-blur-xl border rounded-2xl p-6 ${
           theme === 'light' ? 'bg-white border-purple-200' : 'bg-zinc-950 border-zinc-900'
         }`}>
           <div className="flex items-center justify-between mb-2">
             <FileText className={`w-8 h-8 ${theme === 'light' ? 'text-purple-600' : 'text-purple-500'}`} />
-            <TrendingUp className="w-5 h-5 text-emerald-500" />
           </div>
           <div className={`text-3xl font-semibold mb-1 ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
-            {reports.length}
+            {realReports.length}
           </div>
           <div className={`text-sm font-medium ${theme === 'light' ? 'text-zinc-600' : 'text-zinc-400'}`}>
-            Total Reports
-          </div>
-        </div>
-
-        <div className={`backdrop-blur-xl border rounded-2xl p-6 ${
-          theme === 'light' ? 'bg-white border-purple-200' : 'bg-zinc-950 border-zinc-900'
-        }`}>
-          <div className="flex items-center justify-between mb-2">
-            <Download className={`w-8 h-8 ${theme === 'light' ? 'text-purple-600' : 'text-purple-500'}`} />
-          </div>
-          <div className={`text-3xl font-semibold mb-1 ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
-            190
-          </div>
-          <div className={`text-sm font-medium ${theme === 'light' ? 'text-zinc-600' : 'text-zinc-400'}`}>
-            Downloads This Month
+            Generated Reports
           </div>
         </div>
 
@@ -153,102 +167,80 @@ export function ReportsView() {
             <Calendar className={`w-8 h-8 ${theme === 'light' ? 'text-purple-600' : 'text-purple-500'}`} />
           </div>
           <div className={`text-3xl font-semibold mb-1 ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
-            3
+            {realReports.length > 0 ? new Date(realReports[0].created).toLocaleDateString() : '-'}
           </div>
           <div className={`text-sm font-medium ${theme === 'light' ? 'text-zinc-600' : 'text-zinc-400'}`}>
-            Scheduled Reports
+            Last Report Generated
           </div>
         </div>
       </div>
 
-      {/* Reports List */}
-      <div className="grid grid-cols-1 gap-4">
-        {filteredReports.map((report, index) => (
-          <motion.div
-            key={report.id}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: index * 0.05 }}
-            className={`backdrop-blur-xl border rounded-2xl p-6 transition-all group ${
-              theme === 'light'
-                ? 'bg-white border-purple-200 hover:shadow-lg hover:shadow-purple-100'
-                : 'bg-zinc-950 border-zinc-900 hover:border-zinc-800'
-            }`}
-          >
-            <div className="flex items-start justify-between">
-              <div className="flex items-start gap-4 flex-1">
-                <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                  theme === 'light' ? 'bg-purple-100' : 'bg-zinc-900'
-                }`}>
-                  <FileText className={`w-6 h-6 ${theme === 'light' ? 'text-purple-600' : 'text-purple-500'}`} />
-                </div>
-                <div className="flex-1">
-                  <h3 className={`text-lg font-semibold mb-2 ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
-                    {report.title}
-                  </h3>
-                  <p className={`text-sm font-medium mb-3 ${theme === 'light' ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                    {report.description}
-                  </p>
-                  <div className={`flex items-center gap-4 text-sm font-medium ${
-                    theme === 'light' ? 'text-zinc-500' : 'text-zinc-500'
-                  }`}>
-                    <div className="flex items-center gap-1">
-                      <Calendar className="w-4 h-4" />
-                      {report.date}
-                    </div>
-                    <div>Size: {report.size}</div>
-                    <div>{report.downloads} downloads</div>
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
-                  theme === 'light'
-                    ? 'bg-purple-100 text-purple-700 hover:bg-purple-200'
-                    : 'bg-purple-900 text-purple-300 hover:bg-purple-800'
-                }`}>
-                  View
-                </button>
-                <button className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition-all">
-                  <Download className="w-4 h-4" />
-                  Download
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        ))}
-      </div>
-
-      {/* Report Templates */}
+      {/* Generated Reports List */}
       <div className={`backdrop-blur-xl border rounded-2xl p-6 ${
         theme === 'light' ? 'bg-white border-purple-200' : 'bg-zinc-950 border-zinc-900'
       }`}>
         <h2 className={`text-xl font-semibold mb-4 ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
-          Available Report Templates
+          Generated Reports
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {[
-            { name: 'Incident Summary', description: 'Overview of all incidents in a time period' },
-            { name: 'Detection Analytics', description: 'Detailed analysis of AI detections and patterns' },
-            { name: 'Response Performance', description: 'Team response times and effectiveness metrics' },
-          ].map((template, index) => (
-            <div
-              key={index}
-              className={`p-4 rounded-xl border transition-all cursor-pointer ${
-                theme === 'light'
-                  ? 'border-purple-200 hover:bg-purple-50'
-                  : 'border-zinc-800 hover:bg-zinc-900'
-              }`}
-            >
-              <h3 className={`font-semibold mb-1 ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
-                {template.name}
-              </h3>
-              <p className={`text-sm font-medium ${theme === 'light' ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                {template.description}
-              </p>
-            </div>
-          ))}
-        </div>
+
+        {isLoadingReports ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className={`w-8 h-8 animate-spin ${theme === 'light' ? 'text-purple-600' : 'text-purple-500'}`} />
+          </div>
+        ) : realReports.length > 0 ? (
+          <div className="space-y-3">
+            {realReports.map((report, index) => (
+              <motion.div
+                key={report.filename}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.05 }}
+                className={`flex items-center justify-between p-4 rounded-xl border transition-all ${
+                  theme === 'light'
+                    ? 'border-purple-200 hover:bg-purple-50'
+                    : 'border-zinc-800 hover:bg-zinc-900'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                    report.type === 'PDF' ? 'bg-red-500/10' :
+                    report.type === 'XLSX' ? 'bg-green-500/10' : 'bg-blue-500/10'
+                  }`}>
+                    <FileText className={`w-5 h-5 ${
+                      report.type === 'PDF' ? 'text-red-500' :
+                      report.type === 'XLSX' ? 'text-green-500' : 'text-blue-500'
+                    }`} />
+                  </div>
+                  <div>
+                    <div className={`font-medium ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
+                      {report.filename}
+                    </div>
+                    <div className={`text-sm ${theme === 'light' ? 'text-zinc-500' : 'text-zinc-500'}`}>
+                      {new Date(report.created).toLocaleString()} • {(report.size / 1024).toFixed(1)} KB
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDownloadReport(report.filename)}
+                  className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium transition-all"
+                >
+                  <Download className="w-4 h-4" />
+                  Download
+                </button>
+              </motion.div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <FolderOpen className={`w-16 h-16 mb-4 ${theme === 'light' ? 'text-purple-200' : 'text-zinc-700'}`} />
+            <h3 className={`text-lg font-semibold mb-2 ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
+              No Reports Yet
+            </h3>
+            <p className={`max-w-md ${theme === 'light' ? 'text-zinc-600' : 'text-zinc-400'}`}>
+              Start a detection stream and generate your first report using the buttons above.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

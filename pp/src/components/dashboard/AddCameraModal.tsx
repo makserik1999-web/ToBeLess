@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Upload, Camera, Radio, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 import { useTheme } from '../Dashboard';
@@ -33,6 +33,16 @@ export function AddCameraModal({ isOpen, onClose, onSuccess, onStartDetection }:
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
+  // Reset state when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setSuccess(false);
+      setError(null);
+      setIsLoading(false);
+      setSelectedFile(null);
+    }
+  }, [isOpen]);
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -47,7 +57,16 @@ export function AddCameraModal({ isOpen, onClose, onSuccess, onStartDetection }:
     setSuccess(false);
 
     try {
-      // First, toggle features
+      // First, stop any existing stream
+      try {
+        await streamApi.stop();
+        // Wait a moment for the stream to fully stop
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch {
+        // Ignore errors from stopping - stream might not be running
+      }
+
+      // Toggle features
       if (faceRecognitionEnabled) {
         await facesApi.toggleFaceRecognition(true);
       }

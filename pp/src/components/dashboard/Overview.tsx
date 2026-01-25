@@ -3,6 +3,7 @@ import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
 import { motion, AnimatePresence } from 'motion/react';
 import { useState } from 'react';
 import { useTheme } from '../Dashboard';
+import { toast } from 'sonner';
 
 export function Overview() {
   const { theme } = useTheme();
@@ -103,7 +104,10 @@ export function Overview() {
           {['24h', '7d', '30d'].map((range, idx) => (
             <motion.button
               key={range}
-              onClick={() => setTimeRange(range)}
+              onClick={() => {
+                setTimeRange(range);
+                toast.info('Demo mode', { description: 'Live data filtering coming soon' });
+              }}
               className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
                 timeRange === range
                   ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/25'
@@ -284,10 +288,11 @@ export function Overview() {
           <h3 className={`font-semibold ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
             Recent Incidents
           </h3>
-          <motion.button 
+          <motion.button
             className="text-sm text-purple-600 hover:text-purple-700 font-medium transition-colors"
             whileHover={{ scale: 1.05, x: 3 }}
             whileTap={{ scale: 0.95 }}
+            onClick={() => toast.info('Coming soon', { description: 'Full incident list will be available in the next update' })}
           >
             View All
           </motion.button>
@@ -352,10 +357,14 @@ export function Overview() {
                     </div>
                   </div>
                 </div>
-                <motion.button 
+                <motion.button
                   className="opacity-0 group-hover:opacity-100 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition-all shadow-lg shadow-purple-500/25"
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toast.info('Coming soon', { description: 'Incident review will be available in the next update' });
+                  }}
                 >
                   Review
                 </motion.button>

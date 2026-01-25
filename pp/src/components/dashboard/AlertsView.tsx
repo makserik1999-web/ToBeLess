@@ -2,6 +2,7 @@ import { Shield, Swords, Volume2, Users, Filter, Download, Search, MapPin, Clock
 import { useState } from 'react';
 import { motion } from 'motion/react';
 import { useTheme } from '../Dashboard';
+import { toast } from 'sonner';
 
 export function AlertsView() {
   const { theme } = useTheme();
@@ -57,7 +58,9 @@ export function AlertsView() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button className={`flex items-center gap-2 px-4 py-2 border rounded-lg transition-colors ${
+          <button
+            onClick={() => toast.info('Coming soon', { description: 'Advanced filters will be available in the next update' })}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-lg transition-colors ${
             theme === 'light'
               ? 'bg-purple-200/50 hover:bg-purple-300/50 border-purple-300/50 text-purple-800'
               : 'bg-purple-900/50 hover:bg-purple-800 border-purple-700/50 text-purple-200'
@@ -65,7 +68,9 @@ export function AlertsView() {
             <Filter className="w-4 h-4" />
             Filters
           </button>
-          <button className={`flex items-center gap-2 px-4 py-2 border rounded-lg transition-colors ${
+          <button
+            onClick={() => toast.info('Coming soon', { description: 'Export functionality will be available in the next update' })}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-lg transition-colors ${
             theme === 'light'
               ? 'bg-purple-200/50 hover:bg-purple-300/50 border-purple-300/50 text-purple-800'
               : 'bg-purple-900/50 hover:bg-purple-800 border-purple-700/50 text-purple-200'
@@ -180,10 +185,21 @@ export function AlertsView() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 mt-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-purple-50 rounded-lg text-sm transition-colors">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toast.info('Coming soon', { description: 'Alert details view will be available in the next update' });
+                      }}
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-purple-50 rounded-lg text-sm transition-colors"
+                    >
                       View Details
                     </button>
-                    <button className={`px-4 py-2 rounded-lg text-sm transition-colors ${
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toast.info('Coming soon', { description: 'Action management will be available in the next update' });
+                      }}
+                      className={`px-4 py-2 rounded-lg text-sm transition-colors ${
                       theme === 'light'
                         ? 'bg-purple-200 hover:bg-purple-300 text-purple-900'
                         : 'bg-purple-900 hover:bg-purple-800 text-purple-50'
@@ -191,7 +207,13 @@ export function AlertsView() {
                       Take Action
                     </button>
                     {alert.status !== 'resolved' && (
-                      <button className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-purple-50 rounded-lg text-sm transition-colors">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toast.success('Demo mode', { description: 'Alert would be marked as resolved' });
+                        }}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-purple-50 rounded-lg text-sm transition-colors"
+                      >
                         Mark Resolved
                       </button>
                     )}

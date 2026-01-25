@@ -1,7 +1,8 @@
-import { Cpu, Search, Bell, Settings, User, ChevronDown, LogOut, Moon, Sun, LayoutDashboard, Activity, Shield, BarChart3, Users, FileText, Menu, X } from 'lucide-react';
+import { Cpu, Bell, Settings, User, ChevronDown, LogOut, Moon, Sun, LayoutDashboard, Activity, Shield, BarChart3, Users, FileText, Menu, X } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTheme } from '../Dashboard';
+import { toast } from 'sonner';
 
 interface TopNavProps {
   activeView: string;
@@ -11,7 +12,6 @@ interface TopNavProps {
 
 export function TopNav({ activeView, setActiveView, onBackToLanding }: TopNavProps) {
   const { theme, toggleTheme } = useTheme();
-  const [searchValue, setSearchValue] = useState('');
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -61,61 +61,58 @@ export function TopNav({ activeView, setActiveView, onBackToLanding }: TopNavPro
             : 'bg-zinc-950/95 border-b border-zinc-900'
         }`}
       >
-        <div className="max-w-[2000px] mx-auto px-6 py-4">
+        <div className="max-w-[2000px] mx-auto px-4 py-2.5">
           <div className="flex items-center justify-between gap-6">
             {/* Logo */}
             <motion.button
               onClick={onBackToLanding}
-              className="flex items-center gap-3 group"
+              className="flex items-center gap-2 group"
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
             >
-              <div className="w-10 h-10 bg-gradient-to-br from-purple-600 to-purple-700 rounded-xl flex items-center justify-center shadow-lg shadow-purple-500/20 relative overflow-hidden">
+              <div className="w-8 h-8 bg-gradient-to-br from-purple-600 to-purple-700 rounded-lg flex items-center justify-center shadow-lg shadow-purple-500/20 relative overflow-hidden">
                 <motion.div
                   className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent"
                   animate={{ x: ['-100%', '200%'] }}
                   transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
                 />
-                <Cpu className="w-6 h-6 text-white relative z-10" strokeWidth={2} />
+                <Cpu className="w-5 h-5 text-white relative z-10" strokeWidth={2} />
               </div>
               <div className="hidden md:block">
-                <h1 className={`text-lg font-semibold ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
+                <h1 className={`text-base font-semibold leading-tight ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
                   Tobeles AI
                 </h1>
-                <p className={`text-xs font-medium ${theme === 'light' ? 'text-purple-600' : 'text-purple-400'}`}>
-                  Security Platform
-                </p>
               </div>
             </motion.button>
 
             {/* Navigation Menu - Desktop */}
-            <div className="hidden lg:flex items-center gap-2">
+            <div className="hidden lg:flex items-center gap-1">
               {menuItems.map((item) => (
                 <motion.button
                   key={item.id}
                   onClick={() => setActiveView(item.id)}
-                  className={`relative px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                  className={`relative px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
                     activeView === item.id
                       ? 'text-white'
                       : theme === 'light'
                       ? 'text-zinc-700 hover:text-zinc-900 hover:bg-purple-50'
                       : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
                   }`}
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
                 >
                   {activeView === item.id && (
                     <motion.div
                       layoutId="activeTab"
-                      className="absolute inset-0 bg-gradient-to-r from-purple-600 to-purple-700 rounded-xl shadow-lg shadow-purple-500/25"
+                      className="absolute inset-0 bg-gradient-to-r from-purple-600 to-purple-700 rounded-lg shadow-lg shadow-purple-500/25"
                       transition={{ type: 'spring', stiffness: 500, damping: 30 }}
                     />
                   )}
-                  <span className="relative z-10 flex items-center gap-2">
+                  <span className="relative z-10 flex items-center gap-1.5">
                     <item.icon className="w-4 h-4" />
                     {item.label}
                     {item.badge && (
-                      <span className="px-1.5 py-0.5 bg-red-500 text-white text-xs rounded-full">
+                      <span className="px-1.5 py-0.5 bg-red-500 text-white text-[10px] rounded-full leading-none">
                         {item.badge}
                       </span>
                     )}
@@ -125,53 +122,35 @@ export function TopNav({ activeView, setActiveView, onBackToLanding }: TopNavPro
             </div>
 
             {/* Right Actions */}
-            <div className="flex items-center gap-3">
-              {/* Search */}
-              <div className="hidden md:block relative">
-                <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${
-                  theme === 'light' ? 'text-zinc-400' : 'text-zinc-500'
-                }`} />
-                <input
-                  type="text"
-                  value={searchValue}
-                  onChange={(e) => setSearchValue(e.target.value)}
-                  placeholder="Search..."
-                  className={`pl-10 pr-4 py-2 w-64 border rounded-xl text-sm focus:outline-none transition-all ${
-                    theme === 'light'
-                      ? 'bg-purple-50/50 border-purple-200 text-zinc-900 placeholder-zinc-500 focus:border-purple-400 focus:bg-white'
-                      : 'bg-zinc-900 border-zinc-800 text-white placeholder-zinc-500 focus:border-purple-500'
-                  }`}
-                />
-              </div>
-
+            <div className="flex items-center gap-2">
               {/* Theme Toggle */}
               <motion.button
                 onClick={toggleTheme}
-                className={`w-10 h-10 border rounded-xl flex items-center justify-center transition-all ${
+                className={`w-9 h-9 border rounded-lg flex items-center justify-center transition-all ${
                   theme === 'light'
                     ? 'bg-purple-50 hover:bg-purple-100 border-purple-200 text-purple-600'
                     : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-800 text-purple-400'
                 }`}
-                whileHover={{ scale: 1.1, rotate: 180 }}
-                whileTap={{ scale: 0.9 }}
+                whileHover={{ scale: 1.05, rotate: 180 }}
+                whileTap={{ scale: 0.95 }}
               >
-                {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+                {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
               </motion.button>
 
               {/* Notifications */}
               <div className="relative" ref={notifRef}>
                 <motion.button
                   onClick={() => setNotificationOpen(!notificationOpen)}
-                  className={`relative w-10 h-10 border rounded-xl flex items-center justify-center transition-all ${
+                  className={`relative w-9 h-9 border rounded-lg flex items-center justify-center transition-all ${
                     theme === 'light'
                       ? 'bg-purple-50 hover:bg-purple-100 border-purple-200 text-zinc-700'
                       : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-800 text-zinc-300'
                   }`}
-                  whileHover={{ scale: 1.1 }}
-                  whileTap={{ scale: 0.9 }}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                 >
-                  <Bell className="w-5 h-5" />
-                  <motion.span 
+                  <Bell className="w-4 h-4" />
+                  <motion.span
                     className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full"
                     animate={{ scale: [1, 1.2, 1] }}
                     transition={{ duration: 2, repeat: Infinity }}
@@ -196,7 +175,10 @@ export function TopNav({ activeView, setActiveView, onBackToLanding }: TopNavPro
                           <h3 className={`font-semibold ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
                             Notifications
                           </h3>
-                          <button className="text-xs text-purple-600 hover:text-purple-700 font-medium">
+                          <button
+                            onClick={() => toast.success('Demo mode', { description: 'All notifications marked as read' })}
+                            className="text-xs text-purple-600 hover:text-purple-700 font-medium"
+                          >
                             Mark all read
                           </button>
                         </div>
@@ -205,6 +187,10 @@ export function TopNav({ activeView, setActiveView, onBackToLanding }: TopNavPro
                         {notifications.map((notif) => (
                           <motion.div
                             key={notif.id}
+                            onClick={() => {
+                              toast.info('Demo notification', { description: notif.message });
+                              setNotificationOpen(false);
+                            }}
                             className={`p-4 border-b cursor-pointer transition-colors ${
                               theme === 'light'
                                 ? `border-purple-100 hover:bg-purple-50 ${notif.unread ? 'bg-purple-50/50' : ''}`
@@ -235,21 +221,21 @@ export function TopNav({ activeView, setActiveView, onBackToLanding }: TopNavPro
               <div className="relative hidden md:block" ref={profileRef}>
                 <motion.button
                   onClick={() => setProfileOpen(!profileOpen)}
-                  className={`flex items-center gap-2 pl-2 pr-3 py-2 border rounded-xl transition-all ${
+                  className={`flex items-center gap-2 pl-1.5 pr-2.5 py-1.5 border rounded-lg transition-all ${
                     theme === 'light'
                       ? 'bg-purple-50 hover:bg-purple-100 border-purple-200'
                       : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-800'
                   }`}
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
                 >
-                  <div className="w-8 h-8 bg-gradient-to-br from-purple-600 to-purple-700 rounded-xl flex items-center justify-center shadow-lg shadow-purple-500/20">
-                    <User className="w-5 h-5 text-white" />
+                  <div className="w-7 h-7 bg-gradient-to-br from-purple-600 to-purple-700 rounded-md flex items-center justify-center shadow-lg shadow-purple-500/20">
+                    <User className="w-4 h-4 text-white" />
                   </div>
                   <span className={`text-sm font-medium ${theme === 'light' ? 'text-zinc-900' : 'text-white'}`}>
                     Айгерім
                   </span>
-                  <ChevronDown className={`w-4 h-4 ${theme === 'light' ? 'text-zinc-400' : 'text-zinc-500'}`} />
+                  <ChevronDown className={`w-3.5 h-3.5 ${theme === 'light' ? 'text-zinc-400' : 'text-zinc-500'}`} />
                 </motion.button>
 
                 <AnimatePresence>
@@ -280,7 +266,12 @@ export function TopNav({ activeView, setActiveView, onBackToLanding }: TopNavPro
                         </div>
                       </div>
                       <div className="p-2">
-                        <button className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
+                        <button
+                          onClick={() => {
+                            toast.info('Coming soon', { description: 'User profile page will be available in the next update' });
+                            setProfileOpen(false);
+                          }}
+                          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
                           theme === 'light'
                             ? 'text-zinc-700 hover:bg-purple-50'
                             : 'text-zinc-300 hover:bg-zinc-900'
@@ -288,7 +279,12 @@ export function TopNav({ activeView, setActiveView, onBackToLanding }: TopNavPro
                           <User className="w-4 h-4" />
                           <span className="text-sm font-medium">My Profile</span>
                         </button>
-                        <button className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
+                        <button
+                          onClick={() => {
+                            setActiveView('settings');
+                            setProfileOpen(false);
+                          }}
+                          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
                           theme === 'light'
                             ? 'text-zinc-700 hover:bg-purple-50'
                             : 'text-zinc-300 hover:bg-zinc-900'
@@ -314,13 +310,13 @@ export function TopNav({ activeView, setActiveView, onBackToLanding }: TopNavPro
               {/* Mobile Menu Button */}
               <motion.button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                className={`lg:hidden w-10 h-10 border rounded-xl flex items-center justify-center transition-all ${
+                className={`lg:hidden w-9 h-9 border rounded-lg flex items-center justify-center transition-all ${
                   theme === 'light'
                     ? 'bg-purple-50 hover:bg-purple-100 border-purple-200 text-zinc-700'
                     : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-800 text-zinc-300'
                 }`}
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
               >
                 {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
               </motion.button>

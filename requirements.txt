@@ -1,30 +1,50 @@
-# --- CORE ---
-torch==2.0.1+cpu
-torchvision==0.15.2+cpu
-torchaudio==2.0.2+cpu
---extra-index-url https://download.pytorch.org/whl/cpu
+# --- CORE (GPU-enabled for RTX 4060) ---
+# Using CUDA 11.8 (compatible with CUDA 13.1)
+torch==2.7.1+cu118
+torchvision==0.22.1+cu118
+torchaudio==2.7.1+cu118
+--extra-index-url https://download.pytorch.org/whl/cu118
 
-numpy==1.23.5
-pandas==2.0.3
-opencv-python==4.8.1.78
-opencv-contrib-python==4.8.1.78
+numpy>=1.26.0  # Python 3.13 compatible
+pandas>=2.0.3
+opencv-python>=4.8.1.78
+opencv-contrib-python>=4.8.1.78
 
 # --- PILLOW (очень важно!) ---
-Pillow==9.5.0
+Pillow>=10.0.0  # Python 3.13 compatible
 
 # --- Ultralytics YOLO ---
-ultralytics==8.0.20
+ultralytics>=8.3.0  # Python 3.13 compatible
 
 # --- Flask + Tools ---
-Flask==2.3.3
-Werkzeug==3.0.6
+Flask>=2.3.3
+Werkzeug>=3.0.6
 flask-cors>=4.0.0
-Flask-SocketIO==5.5.1
-python-socketio==5.13.0
-python-engineio==4.12.2
+Flask-SocketIO>=5.5.1
+python-socketio>=5.13.0
+python-engineio>=4.12.2
+
+# --- SlowFast Video Understanding (NEW for fight detection) ---
+pytorchvideo>=0.1.5           # Facebook's video understanding library
+fvcore>=0.1.5                 # Core utilities for PyTorchVideo
+iopath>=0.1.10                # I/O utilities
+av>=10.0.0                    # Video encoding/decoding (PyAV)
+# decord==0.6.0               # Skip decord - not available for Python 3.13 yet
 
 # --- Misc ---
-PyYAML==6.0.2
-tqdm==4.67.1
-psutil==7.1.0
-requests==2.32.4
+PyYAML>=6.0.2
+tqdm>=4.67.1
+psutil>=7.1.0
+requests>=2.32.4
+
+# --- AI Chatbot ---
+openai>=1.0.0
+python-dotenv==1.0.0
+
+# --- Report Generation ---
+reportlab>=4.0.0           # PDF report generation
+openpyxl>=3.1.0            # Excel file support for pandas
+
+# --- Audio/Scream Detection ---
+pyaudio>=0.2.14            # Audio capture (optional)
+librosa>=0.10.0            # Audio analysis (optional)
