@@ -1,218 +1,843 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>ToBeLess AI - Система детекции</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-  <style>
-    /* Custom styles for feature buttons */
-    #faceRecognitionBtn.active {
-      background-color: #10b981;
-      border-color: #10b981;
-    }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ToBeLess AI - Detection Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-    #faceBlurBtn.active {
-      background-color: #10b981;
-      border-color: #10b981;
-    }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: #fff;
+            overflow-x: hidden;
+        }
 
-    .btn-secondary {
-      background-color: #6b7280;
-      border-color: #6b7280;
-      color: white;
-      transition: all 0.3s ease;
-    }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px 40px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
 
-    .btn-secondary:hover {
-      background-color: #4b5563;
-      border-color: #4b5563;
-    }
-  </style>
+        .header h1 {
+            font-size: 1.8em;
+        }
+
+        .header a {
+            color: white;
+            text-decoration: none;
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 5px;
+            transition: all 0.3s;
+        }
+
+        .header a:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 30px;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 30px;
+        }
+
+        .main-panel {
+            background: #16213e;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .sidebar {
+            background: #16213e;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .video-container {
+            background: #0f1419;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 20px;
+            position: relative;
+        }
+
+        .video-container img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .video-placeholder {
+            width: 100%;
+            height: 500px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0f1419;
+            color: #666;
+            font-size: 1.2em;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-danger {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c0392b;
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background: #34495e;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #2c3e50;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: #0f1419;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-value.danger {
+            color: #e74c3c;
+        }
+
+        .stat-value.success {
+            color: #2ecc71;
+        }
+
+        .stat-value.warning {
+            color: #f39c12;
+        }
+
+        .stat-label {
+            color: #999;
+            font-size: 0.9em;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.active {
+            background: #2ecc71;
+        }
+
+        .status-indicator.inactive {
+            background: #e74c3c;
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .section {
+            margin-bottom: 30px;
+        }
+
+        .section h3 {
+            margin-bottom: 15px;
+            color: #667eea;
+            font-size: 1.2em;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #999;
+            font-size: 0.9em;
+        }
+
+        .input-group input,
+        .input-group select {
+            width: 100%;
+            padding: 10px;
+            background: #0f1419;
+            border: 1px solid #34495e;
+            border-radius: 5px;
+            color: white;
+            font-size: 1em;
+        }
+
+        .input-group input[type="file"] {
+            padding: 8px;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .alert.success {
+            background: rgba(46, 204, 113, 0.2);
+            border: 1px solid #2ecc71;
+            color: #2ecc71;
+        }
+
+        .alert.error {
+            background: rgba(231, 76, 60, 0.2);
+            border: 1px solid #e74c3c;
+            color: #e74c3c;
+        }
+
+        .alert.show {
+            display: block;
+        }
+
+        .log-container {
+            background: #0f1419;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+        }
+
+        .log-entry {
+            margin-bottom: 8px;
+            padding: 5px;
+            border-left: 3px solid #667eea;
+            padding-left: 10px;
+        }
+
+        .log-entry.fight {
+            border-left-color: #e74c3c;
+            color: #e74c3c;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #34495e;
+            transition: 0.4s;
+            border-radius: 24px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.4s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: #2ecc71;
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(26px);
+        }
+
+        @media (max-width: 1024px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(6, 1fr);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+
+            .header {
+                padding: 15px 20px;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        @media (max-width: 500px) {
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+    </style>
 </head>
 <body>
-  <div class="container">
-
-    <!-- Header -->
-    <header class="header-detection">
-      <div class="header-content">
-        <div class="header-left">
-          <h1>ToBeLess AI</h1>
-          <p>Система детекции насилия в реальном времени</p>
-        </div>
-        <div class="header-right">
-          <a href="{{ url_for('index') }}" class="btn btn-back" target="_blank">← О проекте</a>
-        </div>
-      </div>
-    </header>
-
-    <!-- Info banner + Escalation -->
-    <div class="info-banner" style="align-items:center;">
-      <div class="info-item"><span>Real-time Processing</span></div>
-      <div class="info-item"><span>91% Accuracy</span></div>
-      <div class="info-item"><span>Privacy Protected</span></div>
-      <div id="escalationBanner" style="margin-left:24px;display:none;"></div>
+    <div class="header">
+        <h1>ToBeLess AI - Detection Dashboard</h1>
+        <a href="/">← Back to Home</a>
     </div>
 
-    <!-- Main Grid -->
-    <div class="main-grid">
-      <!-- Video Section -->
-      <section class="video-section card">
-        <div class="video-controls">
-          <div class="control-group">
-            <label>Источник:</label>
-            <select id="sourceType" class="input-field">
-              <option value="0">Веб-камера</option>
-              <option value="video">Видео файл</option>
-              <option value="rtsp">RTSP поток</option>
-            </select>
-            <input type="text" id="sourceInput" class="input-field" placeholder="Введите путь или RTSP URL" style="display: none;">
-            <input type="file" id="fileInput" class="input-field" accept="video/*" style="display: none;">
-          </div>
+    <div class="container">
+        <div id="alert" class="alert"></div>
 
-          <div class="control-group">
-            <button class="btn btn-primary" id="startBtn">Начать детекцию</button>
-            <button class="btn btn-danger" id="stopBtn" disabled>Остановить</button>
-            <button class="btn btn-secondary" id="faceRecognitionBtn">Face Recognition: ON</button>
-            <button class="btn btn-secondary" id="faceBlurBtn">Face Blur: OFF</button>
-          </div>
+        <div class="dashboard">
+            <!-- Main Panel -->
+            <div class="main-panel">
+                <div class="video-container">
+                    <img id="videoFeed" src="" style="display: none;" onerror="handleVideoError()">
+                    <div id="videoPlaceholder" class="video-placeholder">
+                        No video stream. Click "Start Webcam" or upload a video.
+                    </div>
+                </div>
 
-          <div id="statusAlert" class="alert"></div>
-        </div>
+                <div class="controls">
+                    <button class="btn btn-primary" onclick="startWebcam()">Start Webcam</button>
+                    <button class="btn btn-danger" onclick="stopStream()">Stop Stream</button>
+                    <button class="btn btn-secondary" onclick="document.getElementById('videoUpload').click()">Upload Video</button>
+                    <input type="file" id="videoUpload" accept="video/*" style="display: none;" onchange="uploadVideo()">
+                </div>
 
-        <div class="video-display">
-          <div class="video-placeholder" id="videoPlaceholder">
-            <div class="placeholder-content">
-              <p>Выберите источник и нажмите "Начать детекцию"</p>
-              <div class="placeholder-tips">
-                <div class="tip">Поддержка веб-камеры</div>
-                <div class="tip">Загрузка видео файлов</div>
-                <div class="tip">RTSP потоки</div>
-              </div>
+                <div class="section" style="margin-top: 30px;">
+                    <h3>Event Log</h3>
+                    <div id="logContainer" class="log-container">
+                        <div class="log-entry">System ready. Waiting for stream...</div>
+                    </div>
+                </div>
             </div>
-          </div>
 
-          <img id="videoFeed" alt="Live video feed" style="display: none;">
-          <video id="uploadedVideo" controls style="display: none;">
-            <source id="uploadedVideoSource" src="" type="video/mp4">
-            Ваш браузер не поддерживает видео.
-          </video>
-        </div>
-      </section>
+            <!-- Sidebar -->
+            <div class="sidebar">
+                <div class="section">
+                    <h3>
+                        <span class="status-indicator inactive" id="statusIndicator"></span>
+                        System Status
+                    </h3>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-value success" id="peopleCount">0</div>
+                            <div class="stat-label">People</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value danger" id="fightCount">0</div>
+                            <div class="stat-label">Fights</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value danger" id="weaponCount">0</div>
+                            <div class="stat-label">Weapons</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value warning" id="fallCount">0</div>
+                            <div class="stat-label">Falls</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value warning" id="screamCount">0</div>
+                            <div class="stat-label">Screams</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="fpsCount">0</div>
+                            <div class="stat-label">FPS</div>
+                        </div>
+                    </div>
+                </div>
 
-      <!-- Status Panel -->
-      <aside class="status-panel">
-        <div class="status-indicator status-normal" id="statusIndicator">
-          <span>Система готова</span>
-        </div>
+                <div class="section">
+                    <h3>RTSP Stream</h3>
+                    <div class="input-group">
+                        <label>RTSP URL</label>
+                        <input type="text" id="rtspUrl" placeholder="rtsp://username:password@ip:port/stream">
+                    </div>
+                    <button class="btn btn-primary" onclick="startRTSP()">Connect RTSP</button>
+                </div>
 
-        <div class="stats-grid">
-          <div class="stat-card">
-            <div class="stat-value" id="peopleCount">0</div>
-            <div class="stat-label">Обнаружено людей</div>
-          </div>
-          <div class="stat-card stat-danger">
-            <div class="stat-value" id="fightCount">0</div>
-            <div class="stat-label">Обнаружено драк</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-value" id="confidence">0%</div>
-            <div class="stat-label">Уверенность</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-value" id="fps">0</div>
-            <div class="stat-label">Кадры/сек</div>
-          </div>
-        </div>
+                <div class="section">
+                    <h3>Detection Settings</h3>
+                    <div class="input-group">
+                        <label>Body Proximity Threshold</label>
+                        <input type="range" id="bodyProximity" min="50" max="200" value="120" oninput="updateThreshold('body', this.value)">
+                        <span id="bodyValue">120</span>
+                    </div>
+                    <div class="input-group">
+                        <label>Limb Proximity Threshold</label>
+                        <input type="range" id="limbProximity" min="20" max="100" value="50" oninput="updateThreshold('limb', this.value)">
+                        <span id="limbValue">50</span>
+                    </div>
+                </div>
 
-        <div style="margin-top:12px;">
-          <div id="conflictTypeBadge" class="stat-card" style="display:flex;align-items:center;justify-content:center;padding:10px;">
-            <div id="conflictTypeText">Тип: —</div>
-          </div>
-        </div>
+                <div class="section">
+                    <h3>Features</h3>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <span>Face Recognition</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="faceRecognition" checked onchange="toggleFaceRecognition()">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <span>Face Blur</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="faceBlur" onchange="toggleFaceBlur()">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <span>Weapon Detection</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="weaponDetection" checked onchange="toggleWeaponDetection()">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <span>Fall Detection</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="fallDetection" checked onchange="toggleFallDetection()">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span>Scream Detection</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="screamDetection" onchange="toggleScreamDetection()">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
 
-        <div style="margin-top:12px;">
-          <div class="stat-card" style="padding:12px;">
-            <h4 style="margin-bottom:8px;">Опасности</h4>
-            <div id="hazardsList" style="min-height:40px;color:var(--text-secondary);">Нет</div>
-          </div>
-        </div>
-
-        <div class="settings-section card">
-          <h3>Настройки детекции</h3>
-          <div class="setting-item">
-            <label>Близость тел:</label>
-            <div class="setting-input-group">
-              <input type="number" id="bodyThreshold" class="input-field" value="120" min="50" max="300">
-              <span class="setting-unit">px</span>
+                <div class="section">
+                    <h3>Reports</h3>
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                        <button class="btn btn-primary" onclick="generateReport('pdf')">Download PDF Report</button>
+                        <button class="btn btn-secondary" onclick="generateReport('excel')">Download Excel Report</button>
+                        <button class="btn btn-secondary" onclick="generateReport('json')">Download JSON Report</button>
+                    </div>
+                </div>
             </div>
-          </div>
-          <div class="setting-item">
-            <label>Близость конечностей:</label>
-            <div class="setting-input-group">
-              <input type="number" id="limbThreshold" class="input-field" value="50" min="20" max="150">
-              <span class="setting-unit">px</span>
-            </div>
-          </div>
-          <div class="setting-item">
-            <label>Длительность:</label>
-            <div class="setting-input-group">
-              <input type="number" id="holdDuration" class="input-field" value="60" min="10" max="200">
-              <span class="setting-unit">кадры</span>
-            </div>
-          </div>
-          <button class="btn btn-secondary" id="updateSettings">Применить настройки</button>
         </div>
-      </aside>
     </div>
 
-    <!-- Charts + Heatmap -->
-    <section class="charts-section">
-      <div class="chart-container card">
-        <h3>Количество людей во времени</h3>
-        <div class="chart-wrapper"><canvas id="peopleChart"></canvas></div>
-      </div>
+    <script>
+        let eventSource = null;
+        let streamActive = false;
 
-      <div class="chart-container card">
-        <h3>Уверенность детекции</h3>
-        <div class="chart-wrapper"><canvas id="confidenceChart"></canvas></div>
-      </div>
+        // Show alert message
+        function showAlert(message, type) {
+            const alert = document.getElementById('alert');
+            alert.textContent = message;
+            alert.className = `alert ${type} show`;
+            setTimeout(() => {
+                alert.classList.remove('show');
+            }, 5000);
+        }
 
-      <div class="chart-container card" style="grid-column: span 2;">
-        <h3>Тепловая карта конфликтов</h3>
-        <div style="display:flex;gap:16px;align-items:flex-start;">
-          <div style="flex:1;">
-            <div style="background:var(--bg-secondary);padding:12px;border-radius:8px;border:1px solid var(--border-color);">
-              <img id="heatmapImg" src="" alt="Heatmap" style="width:100%;height:360px;object-fit:cover;background:#091022;">
-            </div>
-          </div>
-          <div style="width:260px;">
-            <h4>Hotspots</h4>
-            <div id="hotspotsList" style="color:var(--text-secondary);min-height:300px;overflow:auto;padding-right:8px;">Пока пусто</div>
-          </div>
-        </div>
-      </div>
-    </section>
+        // Add log entry
+        function addLog(message, isFight = false) {
+            const log = document.getElementById('logContainer');
+            const entry = document.createElement('div');
+            entry.className = isFight ? 'log-entry fight' : 'log-entry';
+            const time = new Date().toLocaleTimeString();
+            entry.textContent = `[${time}] ${message}`;
+            log.insertBefore(entry, log.firstChild);
 
-    <!-- Events Section -->
-    <section class="events-section card">
-      <div class="events-header">
-        <h3>Последние события</h3>
-        <div>
-          <button class="btn btn-small" id="clearEvents">Очистить</button>
-        </div>
-      </div>
-      <div class="event-log" id="eventLog">
-        <div class="event-placeholder">
-          <p>События пока не зафиксированы</p>
-          <small>Система будет автоматически регистрировать все обнаруженные инциденты</small>
-        </div>
-      </div>
-    </section>
+            // Keep only last 20 entries
+            while (log.children.length > 20) {
+                log.removeChild(log.lastChild);
+            }
+        }
 
-  </div>
+        // Start webcam
+        async function startWebcam() {
+            try {
+                const response = await fetch('/start_stream', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({source: 'webcam', webcam_index: 0})
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showAlert('Webcam started successfully', 'success');
+                    addLog('Webcam stream started');
+                    startVideoFeed();
+                } else {
+                    showAlert('Error: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showAlert('Failed to start webcam', 'error');
+            }
+        }
 
-  <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+        // Start RTSP
+        async function startRTSP() {
+            const url = document.getElementById('rtspUrl').value;
+            if (!url) {
+                showAlert('Please enter RTSP URL', 'error');
+                return;
+            }
+            try {
+                const response = await fetch('/start_stream', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({source: 'rtsp', rtsp_url: url})
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showAlert('RTSP stream started', 'success');
+                    addLog('RTSP stream connected: ' + url);
+                    startVideoFeed();
+                } else {
+                    showAlert('Error: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showAlert('Failed to connect to RTSP', 'error');
+            }
+        }
+
+        // Upload video
+        async function uploadVideo() {
+            const file = document.getElementById('videoUpload').files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('source', 'file');
+
+            try {
+                const response = await fetch('/start_stream', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showAlert('Video uploaded successfully', 'success');
+                    addLog('Video file processing started: ' + file.name);
+                    startVideoFeed();
+                } else {
+                    showAlert('Error: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showAlert('Failed to upload video', 'error');
+            }
+        }
+
+        // Stop stream
+        async function stopStream() {
+            try {
+                const response = await fetch('/stop_stream', {method: 'POST'});
+                const data = await response.json();
+                if (data.success) {
+                    showAlert('Stream stopped', 'success');
+                    addLog('Stream stopped');
+                    stopVideoFeed();
+                }
+            } catch (error) {
+                showAlert('Failed to stop stream', 'error');
+            }
+        }
+
+        // Start video feed
+        function startVideoFeed() {
+            const video = document.getElementById('videoFeed');
+            const placeholder = document.getElementById('videoPlaceholder');
+            // Add timestamp to force browser to create new connection (avoid caching)
+            video.src = '/video_feed?t=' + Date.now();
+            video.style.display = 'block';
+            placeholder.style.display = 'none';
+            streamActive = true;
+            document.getElementById('statusIndicator').classList.remove('inactive');
+            document.getElementById('statusIndicator').classList.add('active');
+            startStatsStream();
+        }
+
+        // Stop video feed
+        function stopVideoFeed() {
+            const video = document.getElementById('videoFeed');
+            const placeholder = document.getElementById('videoPlaceholder');
+            video.src = '';
+            video.style.display = 'none';
+            placeholder.style.display = 'flex';
+            streamActive = false;
+            document.getElementById('statusIndicator').classList.remove('active');
+            document.getElementById('statusIndicator').classList.add('inactive');
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+        }
+
+        // Handle video feed errors
+        function handleVideoError() {
+            if (streamActive) {
+                // Retry connection after short delay
+                console.log('Video feed error, retrying...');
+                setTimeout(() => {
+                    if (streamActive) {
+                        const video = document.getElementById('videoFeed');
+                        video.src = '/video_feed?t=' + Date.now();
+                    }
+                }, 1000);
+            }
+        }
+
+        // Start stats stream
+        function startStatsStream() {
+            if (eventSource) eventSource.close();
+
+            eventSource = new EventSource('/stats_stream');
+
+            eventSource.onmessage = function(event) {
+                const stats = JSON.parse(event.data);
+                document.getElementById('peopleCount').textContent = stats.people || 0;
+                document.getElementById('fightCount').textContent = stats.fights || 0;
+                document.getElementById('weaponCount').textContent = stats.weapons || 0;
+                document.getElementById('fallCount').textContent = stats.falls || 0;
+                document.getElementById('screamCount').textContent = stats.screams || 0;
+                document.getElementById('fpsCount').textContent = (stats.fps || 0).toFixed(1);
+
+                // Log detection events
+                if (stats.fights > 0 && !window.lastFightCount) {
+                    addLog(`FIGHT DETECTED! Confidence: ${(stats.confidence || 0).toFixed(0)}%`, true);
+                }
+                if (stats.weapons > (window.lastWeaponCount || 0)) {
+                    addLog(`WEAPON DETECTED!`, true);
+                }
+                if (stats.falls > (window.lastFallCount || 0)) {
+                    addLog(`FALL DETECTED! Person down`, true);
+                }
+                if (stats.screams > (window.lastScreamCount || 0)) {
+                    addLog(`SCREAM DETECTED!`, true);
+                }
+                window.lastFightCount = stats.fights;
+                window.lastWeaponCount = stats.weapons;
+                window.lastFallCount = stats.falls;
+                window.lastScreamCount = stats.screams;
+            };
+
+            eventSource.onerror = function() {
+                console.error('Stats stream error');
+            };
+        }
+
+        // Update threshold
+        async function updateThreshold(type, value) {
+            if (type === 'body') {
+                document.getElementById('bodyValue').textContent = value;
+            } else {
+                document.getElementById('limbValue').textContent = value;
+            }
+
+            const data = {
+                body_proximity_threshold: parseFloat(document.getElementById('bodyProximity').value),
+                limb_proximity_threshold: parseFloat(document.getElementById('limbProximity').value)
+            };
+
+            try {
+                await fetch('/settings', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+            } catch (error) {
+                console.error('Failed to update settings');
+            }
+        }
+
+        // Toggle face recognition
+        async function toggleFaceRecognition() {
+            try {
+                const response = await fetch('/toggle_face_recognition', {method: 'POST'});
+                const data = await response.json();
+                if (data.success) {
+                    addLog(`Face recognition ${data.face_recognition_enabled ? 'enabled' : 'disabled'}`);
+                }
+            } catch (error) {
+                console.error('Failed to toggle face recognition');
+            }
+        }
+
+        // Toggle face blur
+        async function toggleFaceBlur() {
+            try {
+                const response = await fetch('/toggle_face_blur', {method: 'POST'});
+                const data = await response.json();
+                if (data.success) {
+                    addLog(`Face blur ${data.face_blur_enabled ? 'enabled' : 'disabled'}`);
+                }
+            } catch (error) {
+                console.error('Failed to toggle face blur');
+            }
+        }
+
+        // Toggle weapon detection
+        async function toggleWeaponDetection() {
+            try {
+                const response = await fetch('/toggle_weapon_detection', {method: 'POST'});
+                const data = await response.json();
+                if (data.success) {
+                    addLog(`Weapon detection ${data.weapon_detection_enabled ? 'enabled' : 'disabled'}`);
+                }
+            } catch (error) {
+                console.error('Failed to toggle weapon detection');
+            }
+        }
+
+        // Toggle fall detection
+        async function toggleFallDetection() {
+            try {
+                const response = await fetch('/toggle_fall_detection', {method: 'POST'});
+                const data = await response.json();
+                if (data.success) {
+                    addLog(`Fall detection ${data.fall_detection_enabled ? 'enabled' : 'disabled'}`);
+                }
+            } catch (error) {
+                console.error('Failed to toggle fall detection');
+            }
+        }
+
+        // Toggle scream detection
+        async function toggleScreamDetection() {
+            try {
+                const response = await fetch('/toggle_scream_detection', {method: 'POST'});
+                const data = await response.json();
+                if (data.success) {
+                    addLog(`Scream detection ${data.scream_detection_enabled ? 'enabled' : 'disabled'}`);
+                }
+            } catch (error) {
+                console.error('Failed to toggle scream detection');
+            }
+        }
+
+        // Generate and download report
+        async function generateReport(format) {
+            try {
+                addLog(`Generating ${format.toUpperCase()} report...`);
+                const response = await fetch('/generate_report', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({format: format})
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showAlert(`Report generated: ${data.filename}`, 'success');
+                    addLog(`Report ready: ${data.filename}`);
+                    // Download the file
+                    window.location.href = `/download_report/${data.filename}`;
+                } else {
+                    showAlert('Failed to generate report: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showAlert('Failed to generate report', 'error');
+            }
+        }
+
+        // Load feature status on page load
+        window.onload = async function() {
+            try {
+                // Load face feature status
+                const faceResponse = await fetch('/feature_status');
+                const faceData = await faceResponse.json();
+                document.getElementById('faceRecognition').checked = faceData.face_recognition_enabled;
+                document.getElementById('faceBlur').checked = faceData.face_blur_enabled;
+
+                // Load detection module status
+                const detResponse = await fetch('/detection_status');
+                const detData = await detResponse.json();
+                document.getElementById('weaponDetection').checked = detData.weapon_detection;
+                document.getElementById('fallDetection').checked = detData.fall_detection;
+                document.getElementById('screamDetection').checked = detData.scream_detection;
+            } catch (error) {
+                console.error('Failed to load feature status');
+            }
+        };
+    </script>
 </body>
 </html>

@@ -51,24 +51,35 @@ class SlowFastDetector:
     """
     SlowFast-based action recognition detector
 
-    Uses SlowFast R50 pretrained on Kinetics-400 to classify actions
-    in video clips. Focuses on detecting violence-related actions.
+    Supports two modes:
+    1. Kinetics-400 (400 classes) - default pretrained model
+    2. RWF-2000 fine-tuned (2 classes) - Fight/NonFight binary classifier
+
+    The detector automatically detects which mode to use based on the checkpoint.
     """
 
-    # Violence-related action classes from Kinetics-400
+    # Violence-related action classes from Kinetics-400 (exact matches)
     VIOLENCE_KEYWORDS = [
-        'punch', 'punching', 'fight', 'fighting', 'slap', 'slapping',
-        'hit', 'hitting', 'kick', 'kicking', 'wrestl', 'wrestling',
-        'headbutt', 'headbutting', 'sword fight', 'boxing',
-        'drop kick', 'side kick', 'high kick'
+        'punching person',  # "punching person (boxing)"
+        'slapping',         # "slapping"
+        'wrestling',        # "wrestling"
+        'sword fighting',   # "sword fighting"
+        'drop kicking',     # "drop kicking"
+        'high kick',        # "high kick"
+        'side kick',        # "side kick"
+        'arm wrestling',    # "arm wrestling" (borderline but physical)
     ]
 
     # Non-violence physical actions (to distinguish from violence)
     NON_VIOLENCE_KEYWORDS = [
         'hug', 'hugging', 'embrac', 'dancing', 'exercis',
         'yoga', 'tai chi', 'stretching', 'clapping', 'waving',
-        'shaking hands', 'high fiving'
+        'shaking hands', 'high fiving', 'punching bag',  # Not violence against person
+        'kicking soccer', 'kicking field', 'playing kickball'  # Sports
     ]
+
+    # RWF-2000 fine-tuned model classes
+    RWF_CLASSES = ['NonFight', 'Fight']
 
     def __init__(
         self,
@@ -76,34 +87,57 @@ class SlowFastDetector:
         labels_path: str = "models/kinetics400_labels.json",
         device: str = 'cuda',
         confidence_threshold: float = 0.3,
-        violence_threshold: float = 0.4
+        violence_threshold: float = 0.4,
+        use_fp16: bool = True,  # Half precision for faster inference
+        use_rwf_model: bool = False  # Use RWF-2000 fine-tuned model
     ):
         """
         Initialize SlowFast detector
 
         Args:
-            model_path: Path to model weights (None = use pretrained)
-            labels_path: Path to Kinetics-400 labels JSON
+            model_path: Path to model weights (None = use pretrained, or path to fine-tuned)
+            labels_path: Path to Kinetics-400 labels JSON (ignored if use_rwf_model=True)
             device: 'cuda' or 'cpu'
             confidence_threshold: Minimum confidence for predictions
             violence_threshold: Minimum confidence to classify as violent
+            use_fp16: Use half precision (FP16) for faster inference on GPU
+            use_rwf_model: If True, load RWF-2000 fine-tuned 2-class model
         """
         self.device = device if torch.cuda.is_available() else 'cpu'
         self.confidence_threshold = confidence_threshold
         self.violence_threshold = violence_threshold
+        self.use_fp16 = use_fp16 and self.device == 'cuda'  # FP16 only works on CUDA
+
+        # Determine model mode
+        self.use_rwf_model = use_rwf_model
+        self.num_classes = 2 if use_rwf_model else 400
+
+        # Auto-detect RWF model if path contains 'rwf' or 'best_model'
+        if model_path and ('rwf' in model_path.lower() or 'best_model' in model_path.lower()):
+            self.use_rwf_model = True
+            self.num_classes = 2
+            print("[SlowFast] Auto-detected RWF fine-tuned model (2 classes)")
 
         # Load model
         print(f"[SlowFast] Loading model on {self.device}...")
         self.model = self._load_model(model_path)
         self.model.eval()
 
-        # Load action labels
-        self.labels = self._load_labels(labels_path)
-        print(f"[SlowFast] Loaded {len(self.labels)} action classes")
+        # Convert to FP16 if enabled (significant speedup on modern GPUs)
+        if self.use_fp16:
+            self.model = self.model.half()
+            print("[SlowFast] Using FP16 (half precision) for faster inference")
 
-        # Identify violence-related class indices
-        self.violence_indices = self._identify_violence_classes()
-        print(f"[SlowFast] Identified {len(self.violence_indices)} violence-related classes")
+        # Load action labels based on model type
+        if self.use_rwf_model:
+            self.labels = self.RWF_CLASSES
+            self.violence_indices = [1]  # Index 1 = Fight
+            print(f"[SlowFast] Using RWF-2000 classes: {self.labels}")
+        else:
+            self.labels = self._load_labels(labels_path)
+            print(f"[SlowFast] Loaded {len(self.labels)} Kinetics-400 classes")
+            self.violence_indices = self._identify_violence_classes()
+            print(f"[SlowFast] Identified {len(self.violence_indices)} violence-related classes")
 
         # Statistics
         self.total_inferences = 0
@@ -122,15 +156,38 @@ class SlowFastDetector:
         """
         try:
             from pytorchvideo.models.hub import slowfast_r50
+            import torch.nn as nn
 
             # Load pretrained model
             model = slowfast_r50(pretrained=True)
 
+            # Modify head for RWF 2-class model
+            if self.use_rwf_model:
+                print("[SlowFast] Modifying head for 2-class output...")
+                in_features = model.blocks[6].proj.in_features
+                model.blocks[6].proj = nn.Linear(in_features, 2)
+
             # Load custom weights if provided
             if model_path and Path(model_path).exists():
                 print(f"[SlowFast] Loading weights from {model_path}")
-                state_dict = torch.load(model_path, map_location=self.device)
+                checkpoint = torch.load(model_path, map_location=self.device)
+
+                # Handle checkpoint format (can be dict with 'model_state_dict' or direct state_dict)
+                if isinstance(checkpoint, dict):
+                    if 'model_state_dict' in checkpoint:
+                        state_dict = checkpoint['model_state_dict']
+                        # Print checkpoint info if available
+                        if 'config' in checkpoint:
+                            print(f"[SlowFast] Checkpoint config: {checkpoint['config']}")
+                        if 'best_val_acc' in checkpoint:
+                            print(f"[SlowFast] Best val accuracy: {checkpoint['best_val_acc']:.2f}%")
+                    else:
+                        state_dict = checkpoint
+                else:
+                    state_dict = checkpoint
+
                 model.load_state_dict(state_dict)
+                print("[SlowFast] Custom weights loaded successfully")
 
             model = model.to(self.device)
             return model
@@ -203,6 +260,10 @@ class SlowFastDetector:
         if clip is None:
             return None
 
+        # Convert to FP16 if using half precision
+        if self.use_fp16:
+            clip = [c.half() for c in clip]
+
         # Run inference
         import time
         start_time = time.time()
@@ -210,17 +271,29 @@ class SlowFastDetector:
         with torch.no_grad():
             outputs = self.model(clip)
 
+        # Convert back to FP32 for softmax
+        if self.use_fp16:
+            outputs = outputs.float()
+
         inference_time_ms = (time.time() - start_time) * 1000
 
         # Get probabilities
         probs = torch.nn.functional.softmax(outputs, dim=1)
 
+        # DEBUG: Print RWF model probabilities
+        if self.use_rwf_model:
+            non_fight_prob = probs[0][0].item()
+            fight_prob = probs[0][1].item()
+            print(f"[SlowFast] Raw: NonFight={non_fight_prob:.3f}, Fight={fight_prob:.3f}")
+
         # Get top-k predictions
-        top_probs, top_indices = torch.topk(probs, k=top_k, dim=1)
+        # FIX: Ensure k does not exceed number of classes (e.g. asking for top-3 in 2-class model)
+        actual_k = min(top_k, probs.size(1))
+        top_probs, top_indices = torch.topk(probs, k=actual_k, dim=1)
 
         # Build results
         top_k_actions = []
-        for i in range(top_k):
+        for i in range(actual_k):
             class_idx = top_indices[0][i].item()
             prob = top_probs[0][i].item()
             class_name = self.labels[class_idx] if class_idx < len(self.labels) else f"class_{class_idx}"
@@ -264,6 +337,15 @@ class SlowFastDetector:
         Returns:
             True if violent action detected above threshold
         """
+        # RWF 2-class model: simple binary check
+        if self.use_rwf_model:
+            # Class 0 = NonFight, Class 1 = Fight
+            # Check if Fight class (index 1) is top prediction with high confidence
+            if class_indices[0] == 1 and probabilities[0] >= self.violence_threshold:
+                return True
+            return False
+
+        # Kinetics-400 model: check multiple violence classes
         # Check if any violence class is in top predictions with high confidence
         for idx, prob in zip(class_indices, probabilities):
             if idx in self.violence_indices and prob >= self.violence_threshold:
@@ -298,7 +380,9 @@ class SlowFastDetector:
             'avg_inference_time_ms': self.avg_inference_time,
             'device': self.device,
             'confidence_threshold': self.confidence_threshold,
-            'violence_threshold': self.violence_threshold
+            'violence_threshold': self.violence_threshold,
+            'model_type': 'RWF-2000 (2-class)' if self.use_rwf_model else 'Kinetics-400 (400-class)',
+            'num_classes': self.num_classes
         }
 
     def reset_statistics(self):
@@ -419,3 +503,62 @@ class SlowFastBatchDetector(SlowFastDetector):
                 self.total_violence_detected += 1
 
         return results
+
+
+# ============ Factory Functions ============
+
+def create_slowfast_detector(
+    model_type: str = "auto",
+    rwf_model_path: str = "models/rwf_finetuned/best_model.pth",
+    kinetics_labels_path: str = "models/kinetics400_labels.json",
+    device: str = "cuda",
+    confidence_threshold: float = 0.3,
+    violence_threshold: float = 0.5,
+    use_fp16: bool = True
+) -> SlowFastDetector:
+    """
+    Factory function to create the appropriate SlowFast detector
+
+    Args:
+        model_type: "rwf" for fine-tuned, "kinetics" for pretrained, "auto" to auto-detect
+        rwf_model_path: Path to RWF fine-tuned checkpoint
+        kinetics_labels_path: Path to Kinetics-400 labels
+        device: 'cuda' or 'cpu'
+        confidence_threshold: Minimum confidence for predictions
+        violence_threshold: Minimum confidence to classify as violent
+        use_fp16: Use half precision
+
+    Returns:
+        Configured SlowFastDetector instance
+    """
+    # Auto-detect: prefer RWF if available
+    if model_type == "auto":
+        if Path(rwf_model_path).exists():
+            model_type = "rwf"
+            print(f"[Factory] Auto-detected RWF model at {rwf_model_path}")
+        else:
+            model_type = "kinetics"
+            print("[Factory] RWF model not found, using Kinetics-400 pretrained")
+
+    if model_type == "rwf":
+        if not Path(rwf_model_path).exists():
+            raise FileNotFoundError(f"RWF model not found: {rwf_model_path}")
+
+        return SlowFastDetector(
+            model_path=rwf_model_path,
+            device=device,
+            confidence_threshold=confidence_threshold,
+            violence_threshold=violence_threshold,
+            use_fp16=use_fp16,
+            use_rwf_model=True
+        )
+    else:
+        return SlowFastDetector(
+            model_path=None,
+            labels_path=kinetics_labels_path,
+            device=device,
+            confidence_threshold=confidence_threshold,
+            violence_threshold=violence_threshold,
+            use_fp16=use_fp16,
+            use_rwf_model=False
+        )

@@ -6,18 +6,20 @@ Extended with: weapon detection, fall detection, scream detection, and report ge
 from face_recognizer import FaceRecognizer
 from face_blur import blur_faces
 from hybrid_fight_detector import HybridFightDetector
+from video_source import RealTimeCapture
 from weapon_detector import WeaponDetector
 from fall_detector import FallDetector
 from scream_detector import ScreamDetector
 from report_generator import ReportGenerator
+from video_source import RealTimeCapture
 import cv2
 
 # инициализация (один раз при старте)
-face_rec = FaceRecognizer(yolo_model_path="yolov8n-face.pt", db_path="faces/embeddings.json", debug=True)
+face_rec = FaceRecognizer(yolo_model_path="yolov8n-face.pt", db_path="faces/embeddings.json", debug=False)
 # если DB пустая — автоматически заполнить из faces/images (имена: Alex_1.jpg -> Alex)
 face_rec.bulk_register_from_folder("faces/images")
 face_blur_enabled = False
-face_recognition_enabled = True  # default on
+face_recognition_enabled = False  # DISABLED by default for performance (enable via API)
 
 import os, time, uuid, json, threading, traceback
 from pathlib import Path
@@ -68,9 +70,120 @@ FACES_DIR.mkdir(parents=True, exist_ok=True)
 
 ALERT_COOLDOWN = 8
 ANALYTICS_SNAPSHOT_SIZE = 300
-SKIP_FRAMES = 1
-RESIZE_WIDTH = 640
+SKIP_FRAMES = 2          # Process every 2nd frame for 2x speedup
+RESIZE_WIDTH = 416       # STABLE BASELINE: 416 for balance of speed & accuracy
 SSE_INTERVAL = 0.5
+
+# ------------ Performance Profiling ------------
+PROFILING_ENABLED = True  # Toggle profiling on/off
+PROFILE_INTERVAL = 30     # Print stats every N frames
+
+class PerformanceProfiler:
+    """Performance profiler for video processing pipeline"""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        """Reset all timing statistics"""
+        self.timings = {
+            'hybrid_detection': [],    # Full hybrid detector (pose + action)
+            'weapon_detection': [],
+            'fall_detection': [],
+            'scream_detection': [],
+            'frame_update': [],        # Frame buffer and stats update
+            'total_frame': []          # Total frame processing time
+        }
+        self.frame_count = 0
+        self.start_time = time.time()
+
+    def time_function(self, name: str):
+        """Context manager for timing a function"""
+        return TimingContext(self, name)
+
+    def add_timing(self, name: str, duration: float):
+        """Add a timing measurement"""
+        if name in self.timings:
+            self.timings[name].append(duration)
+
+    def print_stats(self, hybrid_detector=None):
+        """Print performance statistics"""
+        if not PROFILING_ENABLED:
+            return
+
+        elapsed = time.time() - self.start_time
+        actual_fps = self.frame_count / elapsed if elapsed > 0 else 0
+
+        print("\n" + "="*70)
+        print(f"[PROFILER] Performance Statistics (last {PROFILE_INTERVAL} frames)")
+        print("="*70)
+
+        total_time = 0
+        bottleneck = ("none", 0)
+
+        for name, times in self.timings.items():
+            if times:
+                avg_ms = (sum(times) / len(times)) * 1000
+                max_ms = max(times) * 1000
+                total_time += avg_ms
+
+                # Track bottleneck
+                if avg_ms > bottleneck[1]:
+                    bottleneck = (name, avg_ms)
+
+                print(f"  {name:20s}: avg={avg_ms:6.1f}ms  max={max_ms:6.1f}ms  calls={len(times)}")
+
+        print("-"*70)
+        print(f"  {'TOTAL':20s}: avg={total_time:6.1f}ms")
+        print(f"  Actual FPS: {actual_fps:.1f}")
+        print(f"  Theoretical max FPS: {1000/total_time:.1f}" if total_time > 0 else "  Theoretical max FPS: N/A")
+        print(f"  🔴 BOTTLENECK: {bottleneck[0]} ({bottleneck[1]:.1f}ms)")
+
+        # Print hybrid detector sub-timings if available
+        if hybrid_detector and hasattr(hybrid_detector, 'get_profiling_stats'):
+            hs = hybrid_detector.get_profiling_stats()
+            print("\n  [HYBRID BREAKDOWN]")
+            print(f"    YOLO-Pose : avg={hs['yolo_pose']['avg_ms']:6.1f}ms  max={hs['yolo_pose']['max_ms']:6.1f}ms  ({hs['breakdown_pct']['yolo_pct']:.0f}%)")
+            print(f"    SlowFast  : avg={hs['slowfast']['avg_ms']:6.1f}ms  max={hs['slowfast']['max_ms']:6.1f}ms  ({hs['breakdown_pct']['slowfast_pct']:.0f}%) [runs every {self.frame_count//(hs['slowfast']['calls'] or 1)} frames]" if hs['slowfast']['calls'] > 0 else f"    SlowFast  : not run yet")
+            print(f"    Fusion    : avg={hs['fusion']['avg_ms']:6.1f}ms")
+            print(f"    🎯 Sub-bottleneck: {hs['summary']['bottleneck']}")
+            hybrid_detector.reset_profiling_stats()
+
+        print("="*70 + "\n")
+
+        # Reset for next interval
+        self.timings = {k: [] for k in self.timings}
+        self.frame_count = 0
+        self.start_time = time.time()
+
+class TimingContext:
+    """Context manager for timing code blocks"""
+
+    def __init__(self, profiler: PerformanceProfiler, name: str):
+        self.profiler = profiler
+        self.name = name
+        self.start = None
+
+    def __enter__(self):
+        self.start = time.perf_counter()
+        return self
+
+    def __exit__(self, *args):
+        duration = time.perf_counter() - self.start
+        self.profiler.add_timing(self.name, duration)
+
+# Global profiler instance
+profiler = PerformanceProfiler()
+
+def toggle_profiling(enabled: bool = None) -> bool:
+    """Toggle or set profiling state"""
+    global PROFILING_ENABLED
+    if enabled is not None:
+        PROFILING_ENABLED = enabled
+    else:
+        PROFILING_ENABLED = not PROFILING_ENABLED
+    print(f"[Profiler] Profiling {'ENABLED' if PROFILING_ENABLED else 'DISABLED'}")
+    return PROFILING_ENABLED
 
 try:
     import torch
@@ -99,43 +212,97 @@ class FightDetector:
             self.face_rec = FaceRecognizer(
                 yolo_model_path="yolov8n-face.pt",
                 db_path="faces/embeddings.json",
-                debug=True
+                debug=False  # Reduced logging
             )
         except Exception as e:
             print("[FightDetector] FaceRecognizer init failed:", e)
             self.face_recognizer = None
         self.last_recognition = {}
 
+        # ============ GPU DIAGNOSTICS ============
+        print("\n" + "="*50)
+        print("[GPU DIAGNOSTICS]")
+        print("="*50)
+        try:
+            print(f"  PyTorch version: {torch.__version__}")
+            print(f"  CUDA available: {torch.cuda.is_available()}")
+            if torch.cuda.is_available():
+                print(f"  CUDA version: {torch.version.cuda}")
+                print(f"  GPU count: {torch.cuda.device_count()}")
+                print(f"  GPU name: {torch.cuda.get_device_name(0)}")
+                print(f"  GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+            if getattr(torch.backends, "mps", None):
+                print(f"  MPS available: {torch.backends.mps.is_available()}")
+        except Exception as e:
+            print(f"  GPU diagnostics error: {e}")
+        print("="*50 + "\n")
+
+        # Device selection with forced CUDA
         try:
             if device is None:
-                if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-                    device = "mps"
-                elif torch.cuda.is_available():
+                if torch.cuda.is_available():
                     device = "cuda"
+                    print(f"[FightDetector] ✓ Using CUDA (GPU acceleration)")
+                elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                    device = "mps"
+                    print(f"[FightDetector] ✓ Using MPS (Apple Silicon)")
                 else:
                     device = "cpu"
-        except Exception:
+                    print(f"[FightDetector] ⚠️ Using CPU (no GPU available)")
+        except Exception as e:
             device = device or "cpu"
+            print(f"[FightDetector] Device detection failed: {e}, using {device}")
         self.device = device
 
         if YOLO is None:
             raise RuntimeError("ultralytics YOLO not available")
 
-        print(f"[FightDetector] loading pose model '{model_path}' on {self.device}")
-        self.model = YOLO(model_path)
-        try:
-            self.model.to(self.device)
-        except Exception:
-            pass
+        print(f"[FightDetector] Loading pose model '{model_path}' on {self.device}")
 
-        self.body_proximity_threshold = 120.0
-        self.limb_proximity_threshold = 50.0
+        # Load and force model to device
+        try:
+            self.model = YOLO(model_path)
+            # Force to CUDA if available
+            if self.device == 'cuda':
+                self.model.to('cuda')
+                # Verify model is on GPU
+                actual_device = next(self.model.model.parameters()).device
+                print(f"[FightDetector] ✓ Model loaded on: {actual_device}")
+                if 'cuda' not in str(actual_device):
+                    print(f"[FightDetector] ⚠️ WARNING: Model not on CUDA! Forcing...")
+                    self.model.model.cuda()
+            else:
+                self.model.to(self.device)
+        except Exception as e:
+            print(f"[FightDetector] ⚠️ Failed to move model to {self.device}: {e}")
+            print(f"[FightDetector] Falling back to default device")
+            self.model = YOLO(model_path)
+
+        # ============ WARMUP INFERENCE ============
+        # First inference is always slow due to CUDA kernel compilation
+        try:
+            print("[FightDetector] Running warmup inference...")
+            dummy = np.zeros((RESIZE_WIDTH, RESIZE_WIDTH, 3), dtype=np.uint8)
+            with torch.no_grad():
+                _ = self.model(dummy, imgsz=RESIZE_WIDTH, verbose=False)
+            print("[FightDetector] ✓ Warmup complete")
+        except Exception as e:
+            print(f"[FightDetector] Warmup failed: {e}")
+
+        self.body_proximity_threshold = 70.0   # Tightened: closer proximity required (was 80)
+        self.limb_proximity_threshold = 25.0   # Tightened: closer contact required (was 30)
         self.fight_hold_duration = 60
 
         self.fight_detected = False
         self.fight_start_time = 0
         self.last_fight_detection = 0
+        self.last_fight_event_time = 0  # Cooldown for incident counting
         self.pose_history = deque(maxlen=512)
+
+        # Cached poses from last detection (drawn on every fresh frame)
+        self.last_poses = []
+        self.last_fight_info = {'confidence': 0, 'fight_detected': False, 'fight_areas': []}
+        self.skip_counter = 0  # Internal skip counter for YOLO inference
 
         self.analytics = {
             'total_detections': 0,
@@ -210,16 +377,78 @@ class FightDetector:
                             contacts += 1
         return contacts, (min_d if min_d != float('inf') else None)
 
+    def _bbox_iou(self, box1, box2):
+        """Calculate IoU between two bounding boxes to detect duplicate detections"""
+        if box1 is None or box2 is None:
+            return 0.0
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+        inter = max(0, x2 - x1) * max(0, y2 - y1)
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        union = area1 + area2 - inter
+        return inter / union if union > 0 else 0.0
+
+    def _is_same_person(self, kp1, kp2):
+        """Check if two detections are the same person (duplicate / ghost skeleton)."""
+        b1 = self.get_bbox(kp1)
+        b2 = self.get_bbox(kp2)
+
+        # Method 1: IoU — lowered from 0.5 to 0.3 to catch partial overlaps
+        iou = self._bbox_iou(b1, b2)
+        if iou > 0.3:
+            return True, f"IoU={iou:.2f}"
+
+        # Method 2: Box inclusion — one box nearly contained within the other
+        # Catches ghost skeletons split off from a partially occluded person
+        if b1 and b2:
+            x1 = max(b1[0], b2[0])
+            y1 = max(b1[1], b2[1])
+            x2 = min(b1[2], b2[2])
+            y2 = min(b1[3], b2[3])
+            if x2 > x1 and y2 > y1:
+                inter = (x2 - x1) * (y2 - y1)
+                area1 = max(1, (b1[2] - b1[0]) * (b1[3] - b1[1]))
+                area2 = max(1, (b2[2] - b2[0]) * (b2[3] - b2[1]))
+                inclusion = inter / min(area1, area2)
+                if inclusion > 0.8:  # One box is 80%+ inside the other
+                    return True, f"inclusion={inclusion:.2f}"
+
+        # Method 3: Centers very close (less than 50 pixels)
+        c1 = self.get_person_center(kp1)
+        c2 = self.get_person_center(kp2)
+        if c1 is not None and c2 is not None:
+            center_dist = self._dist(c1, c2)
+            if center_dist < 50:
+                return True, f"center_dist={center_dist:.0f}"
+
+        return False, None
+
     def detect_fight(self, poses, frame_count):
         if len(poses) < 2:
             return False, [], {'confidence': 0}
         detected = False
         areas = []
-        metrics = {'body_distances': [], 'limb_crossings': 0, 'close_contacts': 0, 'confidence': 0}
+        metrics = {'body_distances': [], 'limb_crossings': 0, 'close_contacts': 0, 'confidence': 0,
+                   'pairs_checked': 0, 'duplicates_skipped': 0}
+
         for i in range(len(poses)):
             for j in range(i + 1, len(poses)):
                 k1 = poses[i]['keypoints']
                 k2 = poses[j]['keypoints']
+
+                # ===== DUPLICATE DETECTION CHECK =====
+                # Skip if these are the same person detected twice
+                is_same, reason = self._is_same_person(k1, k2)
+                if is_same:
+                    metrics['duplicates_skipped'] += 1
+                    # Uncomment for debug: print(f"[FightDetector] Skipping duplicate: person {i} vs {j} ({reason})")
+                    continue
+
+                metrics['pairs_checked'] += 1
+
                 c1 = self.get_person_center(k1)
                 c2 = self.get_person_center(k2)
                 body_close = False
@@ -228,11 +457,15 @@ class FightDetector:
                     metrics['body_distances'].append(d)
                     if d < self.body_proximity_threshold:
                         body_close = True
+
                 crosses = self.check_limb_crossings(k1, k2)
                 metrics['limb_crossings'] += crosses
                 close_contacts, min_limb = self.check_close_limbs(k1, k2)
                 metrics['close_contacts'] += close_contacts
-                if body_close or crosses > 0 or close_contacts > 0:
+
+                # Only trigger if MULTIPLE indicators (reduce false positives)
+                indicators = sum([body_close, crosses > 0, close_contacts > 1])
+                if indicators >= 2:  # Require at least 2 indicators
                     detected = True
                     b1 = self.get_bbox(k1)
                     b2 = self.get_bbox(k2)
@@ -250,7 +483,9 @@ class FightDetector:
         conf += min(metrics['close_contacts'] * 10.0, 30.0)
         metrics['confidence'] = min(conf, 100.0)
         if detected:
-            self.analytics['total_detections'] += 1
+            # OPTIMIZATION: Move fight counting to HybridFightDetector to respect Veto
+            # self.analytics['total_detections'] += 1 (Disabled here)
+            
             self.analytics['detection_confidence_history'].append({
                 'frame': frame_count,
                 'confidence': metrics['confidence'],
@@ -270,231 +505,143 @@ class FightDetector:
                 cv2.line(frame, p1, p2, color, 2)
 
 
-    def process_frame(self, frame, frame_count):
+    def process_frame(self, frame, frame_count, run_detection=True):
+        """
+        Process a frame. Always returns the FRESH frame with overlays.
+
+        Args:
+            frame: Current video frame (BGR)
+            frame_count: Frame number
+            run_detection: If True, run YOLO inference. If False, reuse last poses.
+
+        Returns:
+            (annotated_frame, metrics_dict)
+        """
         global face_blur_enabled, face_recognition_enabled
-        
-        proc = frame
-        if RESIZE_WIDTH:
-            h, w = frame.shape[:2]
-            if w != RESIZE_WIDTH:
-                scale = RESIZE_WIDTH / float(w)
-                new_h = int(h * scale)
-                proc = cv2.resize(frame, (RESIZE_WIDTH, new_h))
-        
-        try:
-            results = self.model(proc, verbose=False)
-        except Exception as e:
-            return frame.copy(), {}
-        
-        poses = []
-        for r in results:
-            if getattr(r, "keypoints", None) is not None:
-                for kp in r.keypoints.data:
-                    arr = kp.cpu().numpy().copy()
-                    if RESIZE_WIDTH:
-                        sx = frame.shape[1] / float(proc.shape[1])
-                        sy = frame.shape[0] / float(proc.shape[0])
-                        arr[:, 0] *= sx
-                        arr[:, 1] *= sy
-                    poses.append({'keypoints': arr})
-        
-        # ---- Face processing (blur and/or recognition) ----
-        identified_names = []
-        working_frame = frame.copy()
-        
-        # Apply face blur if enabled
-        if face_blur_enabled and hasattr(self, 'face_rec') and self.face_rec is not None:
+
+        poses = self.last_poses  # Default: reuse last known poses
+
+        if run_detection:
+            # ---- Resize for YOLO ----
+            proc = frame
+            if RESIZE_WIDTH:
+                h, w = frame.shape[:2]
+                if w != RESIZE_WIDTH:
+                    scale = RESIZE_WIDTH / float(w)
+                    new_h = int(h * scale)
+                    proc = cv2.resize(frame, (RESIZE_WIDTH, new_h))
+
+            # ---- YOLO inference (single frame, no batching) ----
             try:
-                working_frame, blur_results = blur_faces(working_frame, self.face_rec,
-                                                         min_conf=0.5, blur_strength=25, expand=0.1)
-                # If recognition is disabled, just show "Blurred" for all faces
-                if not face_recognition_enabled:
-                    identified_names = ["Blurred"] * len(poses)
+                with torch.no_grad():
+                    results = self.model(
+                        proc,
+                        imgsz=RESIZE_WIDTH,
+                        verbose=False,
+                        conf=0.5,
+                        device=self.device,
+                        augment=False,
+                        visualize=False
+                    )
             except Exception as e:
-                print(f"[FightDetector] face blur error: {e}")
-        
-        # Face recognition (only if enabled and blur is off, or we want names despite blur)
-        if face_recognition_enabled and hasattr(self, 'face_rec') and self.face_rec is not None:
-            face_boxes = []
-            
-            # Get YOLO face detections
-            try:
-                yolo_face_boxes = self.face_rec.detect_faces(frame)
-            except Exception:
-                yolo_face_boxes = []
-    
-            for p in poses:
-                name_for_person = "Unknown"
-                person_bbox = self.get_bbox(p['keypoints'])
-                face_crop = None
-                
-                # Match YOLO face box to person
-                if person_bbox and yolo_face_boxes:
-                    px1, py1, px2, py2 = person_bbox
-                    best_box = None
-                    
-                    for (fx1, fy1, fx2, fy2, conf) in yolo_face_boxes:
-                        cx = (fx1 + fx2) // 2
-                        cy = (fy1 + fy2) // 2
-                        if cx >= px1 and cx <= px2 and cy >= py1 and cy <= py2:
-                            best_box = (fx1, fy1, fx2, fy2)
-                            break
-                        
-                    if best_box is not None:
-                        fx1, fy1, fx2, fy2 = best_box
-                        fx1 = max(0, fx1)
-                        fy1 = max(0, fy1)
-                        fx2 = min(frame.shape[1] - 1, fx2)
-                        fy2 = min(frame.shape[0] - 1, fy2)
-                        face_crop = frame[fy1:fy2, fx1:fx2].copy()
-    
-                # Fallback: crop from keypoints
-                if face_crop is None and p['keypoints'] is not None:
-                    kp = p['keypoints']
-                    try:
-                        facial_points = []
-                        facial_idx_map = {
-                            'nose': 0, 'left_eye': 1, 'right_eye': 2,
-                            'left_ear': 3, 'right_ear': 4
-                        }
-                        
-                        for name, idx in facial_idx_map.items():
-                            if idx < len(kp) and kp[idx][2] > 0.3:
-                                facial_points.append((int(kp[idx][0]), int(kp[idx][1])))
-                        
-                        if facial_points:
-                            xs = [pt[0] for pt in facial_points]
-                            ys = [pt[1] for pt in facial_points]
-                            
-                            min_x, max_x = min(xs), max(xs)
-                            min_y, max_y = min(ys), max(ys)
-                            
-                            width = max_x - min_x
-                            height = max_y - min_y
-                            
-                            pad_x = max(int(width * 0.4), 30)
-                            pad_y = max(int(height * 0.5), 40)
-                            
-                            x1 = max(0, min_x - pad_x)
-                            y1 = max(0, min_y - pad_y)
-                            x2 = min(frame.shape[1] - 1, max_x + pad_x)
-                            y2 = min(frame.shape[0] - 1, max_y + pad_y)
-                            
-                            if (x2 - x1) >= 30 and (y2 - y1) >= 40:
-                                face_crop = frame[y1:y2, x1:x2].copy()
-                    except Exception as e:
-                        print(f"[FightDetector] keypoint-based face crop error: {e}")
-                        face_crop = None
-    
-                # Identify face
-                if face_crop is not None:
-                    try:
-                        nm, dist = self.face_rec.identify(face_crop)
-                        
-                        # Temporal tracking
-                        person_id = len(identified_names)
-                        
-                        if nm is not None and nm != "Unknown":
-                            if not hasattr(self.face_rec, 'face_tracking'):
-                                self.face_rec.face_tracking = {}
-                            
-                            if person_id not in self.face_rec.face_tracking:
-                                self.face_rec.face_tracking[person_id] = {
-                                    'name': nm,
-                                    'conf': float(dist) if dist else 1.0,
-                                    'frames': 1,
-                                    'last_frame': frame_count
-                                }
-                            else:
-                                tracked = self.face_rec.face_tracking[person_id]
-                                if tracked['name'] == nm:
-                                    tracked['frames'] += 1
-                                    tracked['conf'] = 0.7 * tracked['conf'] + 0.3 * (float(dist) if dist else 1.0)
-                                else:
-                                    if float(dist) if dist else 1.0 > 0.35:
-                                        nm = tracked['name']
-                                    else:
-                                        tracked['name'] = nm
-                                tracked['last_frame'] = frame_count
-                            
-                            # Clean old tracking
-                            to_remove = [pid for pid, track in self.face_rec.face_tracking.items()
-                                        if frame_count - track['last_frame'] > 30]
-                            for pid in to_remove:
-                                del self.face_rec.face_tracking[pid]
-                        
-                        name_for_person = nm
-                        face_boxes.append({'name': nm, 'dist': dist, 'crop_exists': True})
-                        
-                        # Telegram alert
-                        if nm is not None and nm != "Unknown":
-                            now = time.time()
-                            last = self.last_recognition.get(nm, 0)
-                            if now - last > ALERT_COOLDOWN:
-                                try:
-                                    _, buf = cv2.imencode('.jpg', face_crop)
-                                    b = buf.tobytes()
-                                    send_alert(f"👤 Распознан: {nm} (d={dist:.3f})")
-                                    send_photo(b, caption=f"Распознан: {nm}")
-                                    self.last_recognition[nm] = now
-                                except Exception as e:
-                                    print("[FightDetector] telegram send error:", e)
-                    except Exception as e:
-                        print(f"[FightDetector] face identification error: {e}")
-                        name_for_person = "Unknown"
-                else:
-                    name_for_person = "Unknown"
-                    face_boxes.append({'name': name_for_person, 'dist': None, 'crop_exists': False})
-    
-                identified_names.append(name_for_person)
+                results = []
+
+            # ---- Extract poses and scale back to original resolution ----
+            poses = []
+            for r in (results if results else []):
+                if getattr(r, "keypoints", None) is not None:
+                    for kp in r.keypoints.data:
+                        arr = kp.cpu().numpy().copy()
+                        # OPTIMIZATION: Ignore ghost skeletons (e.g. just limbs) that have < 5 keypoints
+                        valid_kps = sum(1 for pt in arr if pt[2] > 0.5)
+                        if valid_kps >= 5:
+                            if RESIZE_WIDTH:
+                                sx = frame.shape[1] / float(proc.shape[1])
+                                sy = frame.shape[0] / float(proc.shape[0])
+                                arr[:, 0] *= sx
+                                arr[:, 1] *= sy
+                            poses.append({'keypoints': arr})
+
+            # Cache poses for reuse on skipped frames
+            self.last_poses = poses
+
+            # ---- Fight detection (only on detection frames) ----
+            fight_detected, fight_areas, metrics = self.detect_fight(poses, frame_count)
+
+            # Update fight state
+            if fight_detected:
+                if not self.fight_detected:
+                    self.fight_start_time = frame_count
+                self.fight_detected = True
+                self.last_fight_detection = frame_count
+            else:
+                if self.fight_detected and (frame_count - self.last_fight_detection > self.fight_hold_duration):
+                    self.fight_detected = False
+
+            # Cache fight info
+            self.last_fight_info = {
+                'confidence': metrics.get('confidence', 0),
+                'fight_detected': fight_detected,
+                'fight_areas': fight_areas if fight_detected else [],
+            }
+
+            # Store pose history
+            self.pose_history.append(poses)
         else:
-            # If recognition disabled, fill with placeholders
+            # Reuse cached fight info for skipped frames
+            metrics = {
+                'confidence': self.last_fight_info.get('confidence', 0),
+                'body_distances': [],
+                'limb_crossings': 0,
+                'close_contacts': 0,
+                'pairs_checked': 0,
+                'duplicates_skipped': 0,
+            }
+            fight_detected = self.last_fight_info.get('fight_detected', False)
+            fight_areas = self.last_fight_info.get('fight_areas', [])
+
+        # ==== RENDER: Always draw on the FRESH frame ====
+
+        # Face processing
+        identified_names = []
+        if not face_blur_enabled and not face_recognition_enabled:
+            out = frame  # No copy needed
             identified_names = ["—"] * len(poses)
-        
-        # Use working_frame (blurred if enabled) for output
-        out = working_frame
-
-        # Detect fight
-        fight_detected, fight_areas, metrics = self.detect_fight(poses, frame_count)
-
-        # Update fight state
-        if fight_detected:
-            if not self.fight_detected:
-                self.fight_start_time = frame_count
-            self.fight_detected = True
-            self.last_fight_detection = frame_count
         else:
-            if self.fight_detected and (frame_count - self.last_fight_detection > self.fight_hold_duration):
-                self.fight_detected = False
+            out = frame.copy()
+            if face_blur_enabled and hasattr(self, 'face_rec') and self.face_rec is not None:
+                try:
+                    out, _ = blur_faces(out, self.face_rec, min_conf=0.5, blur_strength=25, expand=0.1)
+                    if not face_recognition_enabled:
+                        identified_names = ["Blurred"] * len(poses)
+                except Exception as e:
+                    print(f"[FightDetector] face blur error: {e}")
 
-        # Store pose history
-        self.pose_history.append(poses)
+            if face_recognition_enabled and hasattr(self, 'face_rec') and self.face_rec is not None:
+                # Simplified: just mark as Unknown for now (face rec is disabled by default)
+                identified_names = ["Unknown"] * len(poses)
+            elif not identified_names:
+                identified_names = ["—"] * len(poses)
 
-        # Draw skeletons on output
+        # Draw skeletons (always green - hybrid will redraw red if confirmed)
         for p in poses:
-            color = (0, 0, 255) if fight_detected else (0, 255, 0)
-            self.draw_skeleton(out, p['keypoints'], color)
+            self.draw_skeleton(out, p['keypoints'], (0, 255, 0))
 
-        # Draw fight areas
-        if fight_detected and fight_areas:
-            for (x1, y1, x2, y2) in fight_areas:
-                cv2.rectangle(out, (x1, y1), (x2, y2), (0, 0, 255), 3)
-                cv2.putText(out, "FIGHT!", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+        # Draw names
+        for i, p in enumerate(poses):
+            if i < len(identified_names):
+                name = identified_names[i]
+                bbox = self.get_bbox(p['keypoints'])
+                if bbox and name and name != "—":
+                    x1, y1, x2, y2 = bbox
+                    cv2.putText(out, name, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-        # Draw identified names if available
-        if identified_names:
-            for i, p in enumerate(poses):
-                if i < len(identified_names):
-                    name = identified_names[i]
-                    bbox = self.get_bbox(p['keypoints'])
-                    if bbox and name and name != "—":
-                        x1, y1, x2, y2 = bbox
-                        label = f"{name}"
-                        cv2.putText(out, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-
-        # Add metrics to return
+        # Build return metrics
         metrics['people_count'] = len(poses)
         metrics['people_names'] = identified_names
+        metrics['fight_detected'] = fight_detected
+        metrics['fight_areas'] = fight_areas
+        metrics['poses'] = poses
 
         return out, metrics
 
@@ -535,7 +682,6 @@ video_cap = None
 proc_thread = None
 frame_lock = threading.Lock()
 current_frame = None
-last_annot = None
 stream_active = False
 
 analytics_buffer = deque(maxlen=4000)
@@ -582,9 +728,9 @@ def _send_alert_nonblocking(text, frame_path=None, caption=None):
 # ------------- Processing loop -------------
 def processing_loop(source_is_file=False, job_id=None):
     global detector, weapon_detector, fall_detector, scream_detector
-    global video_cap, current_frame, last_annot, stream_active
+    global video_cap, current_frame, stream_active
     global last_alert_time, last_weapon_alert_time, last_fall_alert_time, last_scream_alert_time
-    global detection_events
+    global detection_events, profiler
 
     frame_count = 0
     processed = 0
@@ -595,118 +741,56 @@ def processing_loop(source_is_file=False, job_id=None):
     fall_count = 0
     scream_count = 0
 
+    # Reset profiler for new session
+    profiler.reset()
+
     try:
         while stream_active and video_cap and video_cap.isOpened():
+            frame_start = time.perf_counter()
+
             ret, frame = video_cap.read()
             if not ret:
                 if source_is_file:
-                    break
-                time.sleep(0.02)
-                continue
+                    print("[Video] End of file reached, looping...")
+                    video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Rewind to start
+                    ret, frame = video_cap.read()  # Try reading again
+                    if not ret:
+                        print("[Video] ERROR: Cannot read even after loop, stopping")
+                        break
+                    print("[Video] Loop successful, continuing...")
+                    # Reset frame counter for clean loop
+                    frame_count = 0
+                    profiler.reset()
+                    if detector:
+                        detector.reset_statistics()
+                else:
+                    # RealTimeCapture handles reconnection internally;
+                    # just wait briefly for the next frame to arrive.
+                    time.sleep(0.05)
+                    continue
 
             frame_count += 1
-            do_proc = (SKIP_FRAMES <= 1) or (frame_count % SKIP_FRAMES == 0)
+            profiler.frame_count += 1
+
+            # YOLO runs on selected frames; every frame goes to hybrid (for SlowFast buffer)
+            run_yolo = (SKIP_FRAMES <= 1) or (frame_count % SKIP_FRAMES == 0)
+
+            # Debug every 60 frames
+            if frame_count % 60 == 0:
+                print(f"[Loop] Frame {frame_count}: stream_active={stream_active}, "
+                      f"cap.isOpened()={video_cap.isOpened() if video_cap else False}")
+
             out_frame = None
             metrics = {}
 
-            if do_proc:
+            # EVERY frame goes to hybrid detector (for temporal buffer + rendering)
+            # YOLO only runs when run_yolo=True
+            with profiler.time_function('hybrid_detection'):
                 try:
-                    out_frame, metrics = detector.process_frame(frame, frame_count)
-                    last_annot = out_frame.copy()
+                    out_frame, metrics = detector.process_frame(frame, frame_count, run_yolo=run_yolo)
                 except Exception as e:
                     out_frame = frame.copy()
                     metrics = {}
-
-                # Weapon detection
-                if weapon_detector and weapon_detection_enabled:
-                    try:
-                        weapon_detections = weapon_detector.detect(frame)
-                        if weapon_detections:
-                            out_frame = weapon_detector.draw_detections(out_frame, weapon_detections)
-                            weapon_count += len(weapon_detections)
-                            metrics['weapons'] = weapon_detections
-
-                            # Alert for weapons
-                            if time.time() - last_weapon_alert_time > ALERT_COOLDOWN:
-                                for wd in weapon_detections:
-                                    snap = UPLOAD_DIR / f"weapon_{int(time.time())}.jpg"
-                                    cv2.imwrite(str(snap), out_frame)
-                                    txt = f"⚠️ WEAPON DETECTED: {wd['class_name'].upper()} (conf={wd['confidence']:.0%})"
-                                    _send_alert_nonblocking(txt, str(snap), caption=txt)
-
-                                    # Store event for reports
-                                    with detection_events_lock:
-                                        detection_events.append({
-                                            'type': 'weapon',
-                                            'subtype': wd['class_name'],
-                                            'confidence': wd['confidence'],
-                                            'timestamp': datetime.now().isoformat(),
-                                            'details': f"Weapon: {wd['class_name']}, Danger: {wd['danger_level']}"
-                                        })
-
-                                last_weapon_alert_time = time.time()
-                    except Exception as e:
-                        print(f"[Weapon detection error] {e}")
-
-                # Fall detection
-                if fall_detector and fall_detection_enabled:
-                    try:
-                        fall_detections = fall_detector.detect(frame)
-                        if fall_detections:
-                            out_frame = fall_detector.draw_detections(out_frame, fall_detections)
-                            fall_count += len(fall_detections)
-                            metrics['falls'] = fall_detections
-
-                            # Alert for falls
-                            if time.time() - last_fall_alert_time > ALERT_COOLDOWN:
-                                snap = UPLOAD_DIR / f"fall_{int(time.time())}.jpg"
-                                cv2.imwrite(str(snap), out_frame)
-                                txt = f"🚨 FALL DETECTED! Person down - needs assistance"
-                                _send_alert_nonblocking(txt, str(snap), caption=txt)
-
-                                # Store event for reports
-                                with detection_events_lock:
-                                    detection_events.append({
-                                        'type': 'fall',
-                                        'confidence': fall_detections[0].get('confidence', 0.8),
-                                        'timestamp': datetime.now().isoformat(),
-                                        'details': "Person fell - may need assistance"
-                                    })
-
-                                last_fall_alert_time = time.time()
-                    except Exception as e:
-                        print(f"[Fall detection error] {e}")
-
-                # Scream detection (check queue)
-                if scream_detector and scream_detection_enabled:
-                    try:
-                        scream_event = scream_detector.get_detection()
-                        if scream_event:
-                            scream_count += 1
-                            metrics['scream'] = scream_event
-
-                            # Alert for screams
-                            if time.time() - last_scream_alert_time > ALERT_COOLDOWN:
-                                snap = UPLOAD_DIR / f"scream_{int(time.time())}.jpg"
-                                cv2.imwrite(str(snap), out_frame)
-                                txt = f"🔊 SCREAM DETECTED! Volume: {scream_event['volume']:.0%}, Score: {scream_event['score']:.0%}"
-                                _send_alert_nonblocking(txt, str(snap), caption=txt)
-
-                                # Store event for reports
-                                with detection_events_lock:
-                                    detection_events.append({
-                                        'type': 'scream',
-                                        'confidence': scream_event['score'],
-                                        'timestamp': datetime.now().isoformat(),
-                                        'details': f"Volume: {scream_event['volume']:.0%}"
-                                    })
-
-                                last_scream_alert_time = time.time()
-                    except Exception as e:
-                        print(f"[Scream detection error] {e}")
-
-            else:
-                out_frame = last_annot.copy() if last_annot is not None else frame.copy()
 
             # Fight alerting
             if detector.fight_detected and (time.time() - last_alert_time > ALERT_COOLDOWN):
@@ -738,48 +822,57 @@ def processing_loop(source_is_file=False, job_id=None):
                         'details': f"People involved: {len(detector.pose_history[-1]) if detector.pose_history else 0}"
                     })
 
-            with frame_lock:
-                current_frame = out_frame
+            # Frame update and stats (profiled)
+            with profiler.time_function('frame_update'):
+                with frame_lock:
+                    current_frame = out_frame
 
-            # Push to analytics buffer
-            try:
-                people = len(detector.pose_history[-1]) if detector.pose_history else 0
-                fight_flag = bool(detector.fight_detected)
-                
-                processed += 1
-                now = time.time()
-                elapsed = now - t0
-                if elapsed >= 0.5:
-                    fps_est = int(round(processed / elapsed)) if elapsed > 0 else latest_stats.get('fps', 0)
-                    processed = 0
-                    t0 = now
-                else:
-                    fps_est = latest_stats.get('fps', 0)
+                # Push to analytics buffer
+                try:
+                    people = len(detector.pose_history[-1]) if detector.pose_history else 0
+                    fight_flag = bool(detector.fight_detected)
 
-                snap = {
-                    'frame': frame_count,
-                    'fight': fight_flag,
-                    'people': people,
-                    'metrics': metrics,
-                    'timestamp': datetime.now().isoformat()
-                }
-                analytics_buffer.append(snap)
+                    processed += 1
+                    now = time.time()
+                    elapsed = now - t0
+                    if elapsed >= 0.5:
+                        fps_est = int(round(processed / elapsed)) if elapsed > 0 else latest_stats.get('fps', 0)
+                        processed = 0
+                        t0 = now
+                    else:
+                        fps_est = latest_stats.get('fps', 0)
 
-                # Update stats
-                with latest_stats_lock:
-                    latest_stats['people'] = people
-                    latest_stats['fights'] = detector.analytics.get('total_detections', 0)
-                    latest_stats['weapons'] = weapon_detector.stats['total_detections'] if weapon_detector else 0
-                    latest_stats['falls'] = fall_detector.stats['total_falls_detected'] if fall_detector else 0
-                    latest_stats['screams'] = scream_detector.stats['total_screams_detected'] if scream_detector else 0
-                    latest_stats['fps'] = fps_est
-                    conf = float(metrics.get('confidence', 0.0))
-                    if conf <= 0 and detector.analytics.get('detection_confidence_history'):
-                        conf = float(detector.analytics['detection_confidence_history'][-1].get('confidence', 0.0))
-                    latest_stats['confidence'] = conf
-                    latest_stats['timestamp'] = snap['timestamp']
-            except Exception as e:
-                print(f"[analytics error] {e}")
+                    snap = {
+                        'frame': frame_count,
+                        'fight': fight_flag,
+                        'people': people,
+                        'metrics': metrics,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    analytics_buffer.append(snap)
+
+                    # Update stats
+                    with latest_stats_lock:
+                        latest_stats['people'] = people
+                        latest_stats['fights'] = detector.analytics.get('total_detections', 0)
+                        latest_stats['weapons'] = weapon_detector.stats['total_detections'] if weapon_detector else 0
+                        latest_stats['falls'] = fall_detector.stats['total_falls_detected'] if fall_detector else 0
+                        latest_stats['screams'] = scream_detector.stats['total_screams_detected'] if scream_detector else 0
+                        latest_stats['fps'] = fps_est
+                        # Only show confidence from current frame detection
+                        # Don't use stale historical confidence when no fight is detected
+                        latest_stats['confidence'] = float(metrics.get('confidence', 0.0))
+                        latest_stats['timestamp'] = snap['timestamp']
+                except Exception as e:
+                    print(f"[analytics error] {e}")
+
+            # Total frame time
+            frame_duration = time.perf_counter() - frame_start
+            profiler.add_timing('total_frame', frame_duration)
+
+            # Print profiling stats every PROFILE_INTERVAL frames
+            if PROFILING_ENABLED and frame_count % PROFILE_INTERVAL == 0:
+                profiler.print_stats(hybrid_detector=detector)
     
     except Exception as e:
         print("[processing_loop] fatal:", e, traceback.format_exc())
@@ -807,17 +900,40 @@ def processing_loop(source_is_file=False, job_id=None):
 
 
 # ------------- MJPEG generator -------------
+def _create_loading_frame():
+    """Create a loading placeholder frame"""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame[:] = (40, 40, 40)  # Dark gray background
+
+    # Add loading text - brighter so it's clearly visible
+    text = "Initializing..."
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    text_size = cv2.getTextSize(text, font, 1.2, 2)[0]
+    x = (640 - text_size[0]) // 2
+    y = (480 + text_size[1]) // 2
+    cv2.putText(frame, text, (x, y), font, 1.2, (200, 200, 200), 2)
+
+    # Add subtext
+    subtext = "Please wait..."
+    sub_size = cv2.getTextSize(subtext, font, 0.7, 1)[0]
+    cv2.putText(frame, subtext, ((640 - sub_size[0]) // 2, y + 40), font, 0.7, (150, 150, 150), 1)
+
+    return frame
+
+_loading_frame = _create_loading_frame()
+
 def frame_generator():
     global current_frame, stream_active
     while True:
         with frame_lock:
             frm = current_frame.copy() if current_frame is not None else None
         if frm is None:
-            if not stream_active:
+            # Show loading frame instead of black screen
+            if stream_active:
+                frm = _loading_frame
+            else:
                 time.sleep(0.1)
                 continue
-            time.sleep(0.03)
-            continue
         try:
             _, buff = cv2.imencode(".jpg", frm)
             b = buff.tobytes()
@@ -846,47 +962,65 @@ def start_stream():
         try:
             # Create pose detector first
             pose_detector = FightDetector()
-            # Wrap with hybrid detector (SlowFast + Pose with 85/15 weight balance)
+            # OPTIMIZED: Wrap with hybrid detector (background SlowFast thread)
             detector = HybridFightDetector(
                 pose_detector=pose_detector,
                 device='cuda' if pose_detector.device == 'cuda' else 'cpu',
-                require_both=True,  # Conservative mode: both signals required
-                action_weight=0.85,  # 85% SlowFast, 15% Pose
-                violence_threshold=0.6,  # Stricter threshold
-                inference_interval=8  # Run SlowFast every 8 frames
+                require_both=False,  # Relaxed: RWF model is smart enough to work without pose
+                action_weight=0.85,  # Stronger trust in SlowFast (was 0.7)
+                violence_threshold=0.6,  # Raised: require 60% confidence to fire
+                buffer_size=32  # Standard R50 requires 32 frames
             )
+
+            # ============ POST-INIT DIAGNOSTICS ============
+            print("\n" + "="*50)
+            print("[DETECTOR DEVICE STATUS]")
+            print("="*50)
+            print(f"  Pose detector device: {pose_detector.device}")
+            try:
+                yolo_device = next(pose_detector.model.model.parameters()).device
+                print(f"  YOLO model actual device: {yolo_device}")
+            except Exception as e:
+                print(f"  YOLO device check failed: {e}")
+            print(f"  Hybrid detector device: {detector.device if hasattr(detector, 'device') else 'N/A'}")
+            if hasattr(detector, 'slowfast_detector'):
+                print(f"  SlowFast device: {detector.slowfast_detector.device}")
+            print("="*50 + "\n")
+
             # Автозагрузка лиц из папки faces/images
             if hasattr(pose_detector, 'face_rec') and pose_detector.face_rec:
                 load_faces_from_folder(pose_detector.face_rec, folder_path="faces/images")
         except Exception as e:
             return jsonify({'success': False, 'error': f'Failed to init detector: {e}'})
 
-    # Initialize weapon detector
-    if weapon_detector is None and weapon_detection_enabled:
-        try:
-            weapon_detector = WeaponDetector(
-                model_path="yolov8n.pt",
-                confidence_threshold=0.5,
-                device='cuda' if detector and hasattr(detector, 'device') else 'cpu',
-                debug=True
-            )
-            print("[App] ✓ Weapon detector initialized")
-        except Exception as e:
-            print(f"[App] Weapon detector init failed: {e}")
+    # STABLE BASELINE: Weapon detector DISABLED for stability
+    # if weapon_detector is None and weapon_detection_enabled:
+    #     try:
+    #         weapon_detector = WeaponDetector(
+    #             model_path="yolov8n.pt",
+    #             confidence_threshold=0.5,
+    #             device='cuda' if detector and hasattr(detector, 'device') else 'cpu',
+    #             debug=True
+    #         )
+    #         print("[App] ✓ Weapon detector initialized")
+    #     except Exception as e:
+    #         print(f"[App] Weapon detector init failed: {e}")
+    print("[App] Weapon detector DISABLED (stable baseline)")
 
-    # Initialize fall detector
-    if fall_detector is None and fall_detection_enabled:
-        try:
-            fall_detector = FallDetector(
-                model_path="yolov8n-pose.pt",
-                fall_angle_threshold=45.0,
-                confirmation_frames=5,
-                device='cuda' if detector and hasattr(detector, 'device') else 'cpu',
-                debug=True
-            )
-            print("[App] ✓ Fall detector initialized")
-        except Exception as e:
-            print(f"[App] Fall detector init failed: {e}")
+    # STABLE BASELINE: Fall detector DISABLED for stability
+    # if fall_detector is None and fall_detection_enabled:
+    #     try:
+    #         fall_detector = FallDetector(
+    #             model_path="yolov8n-pose.pt",
+    #             fall_angle_threshold=45.0,
+    #             confirmation_frames=5,
+    #             device='cuda' if detector and hasattr(detector, 'device') else 'cpu',
+    #             debug=True
+    #         )
+    #         print("[App] ✓ Fall detector initialized")
+    #     except Exception as e:
+    #         print(f"[App] Fall detector init failed: {e}")
+    print("[App] Fall detector DISABLED (stable baseline)")
 
     # Initialize scream detector (if enabled)
     if scream_detector is None and scream_detection_enabled:
@@ -934,19 +1068,21 @@ def start_stream():
             if proc_thread and proc_thread.is_alive():
                 proc_thread.join(timeout=1.0)
         
-        if isinstance(source, str) and source.isdigit():
-            idx = int(source)
-            video_cap = cv2.VideoCapture(idx)
-        else:
+        if source_is_file:
+            # File source: use plain cv2.VideoCapture so we can loop-back
             video_cap = cv2.VideoCapture(source)
-        
+            try:
+                video_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+        else:
+            # Live source (webcam / RTSP): use RealTimeCapture for zero-lag
+            # frames and automatic reconnection on stream drops.
+            src = int(source) if isinstance(source, str) and source.isdigit() else source
+            video_cap = RealTimeCapture(src, reconnect=True)
+
         if not video_cap.isOpened():
             return jsonify({'success': False, 'error': 'Could not open source'})
-        
-        try:
-            video_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        except Exception:
-            pass
 
         # Reset detector stats for fresh start
         if detector:
@@ -969,15 +1105,22 @@ def start_stream():
 
 @app.route('/stop_stream', methods=['POST'])
 def stop_stream():
-    global stream_active, proc_thread, video_cap, current_frame, latest_stats
+    global stream_active, proc_thread, video_cap, current_frame, latest_stats, detector
     stream_active = False
     if proc_thread and proc_thread.is_alive():
-        proc_thread.join(timeout=1.0)
+        proc_thread.join(timeout=2.0)
     try:
         if video_cap:
             video_cap.release()
     except Exception:
         pass
+    # Stop SlowFast background thread and reset detector for fresh start
+    if detector and hasattr(detector, 'stop'):
+        try:
+            detector.stop()
+        except Exception:
+            pass
+    detector = None  # Force re-creation on next start_stream
 
     # Clear the current frame so old video doesn't persist
     with frame_lock:
@@ -1072,6 +1215,51 @@ def settings():
     except Exception:
         pass
     return jsonify({'success': True})
+
+
+@app.route('/toggle_profiling', methods=['POST'])
+def toggle_profiling_endpoint():
+    """Toggle performance profiling on/off"""
+    global PROFILING_ENABLED
+    data = request.get_json(silent=True) or {}
+    enabled = data.get('enabled')  # Optional: explicitly set True/False
+
+    if enabled is not None:
+        PROFILING_ENABLED = bool(enabled)
+    else:
+        PROFILING_ENABLED = not PROFILING_ENABLED
+
+    profiler.reset()  # Reset stats on toggle
+
+    return jsonify({
+        'success': True,
+        'profiling_enabled': PROFILING_ENABLED
+    })
+
+
+@app.route('/profiling_stats', methods=['GET'])
+def get_profiling_stats():
+    """Get current profiling statistics including hybrid detector breakdown"""
+    global detector
+
+    result = {
+        'enabled': PROFILING_ENABLED,
+        'frame_count': profiler.frame_count,
+        'timings': {
+            name: {
+                'avg_ms': (sum(times) / len(times)) * 1000 if times else 0,
+                'max_ms': max(times) * 1000 if times else 0,
+                'count': len(times)
+            }
+            for name, times in profiler.timings.items()
+        }
+    }
+
+    # Add hybrid detector sub-timings if available
+    if detector and hasattr(detector, 'get_profiling_stats'):
+        result['hybrid_breakdown'] = detector.get_profiling_stats()
+
+    return jsonify(result)
 
 
 @app.route('/add_face', methods=['POST'])
@@ -1462,12 +1650,25 @@ def detection_status():
 
 
 if __name__ == "__main__":
+    print("")
     print("=" * 60)
-    print("Fight Detection System with Face Recognition")
+    print("  OPTIMIZED MODE - ToBeLess AI v2.1")
     print("=" * 60)
-    print(f"Faces folder: {FACES_DIR.resolve()}")
-    print(f"Upload folder: {UPLOAD_DIR.resolve()}")
-    print("Add face images to 'faces/images/' folder")
-    print("File name = person name (e.g., Alex.png → 'Alex')")
+    print("  Fight Detection: YOLO-Pose + SlowFast (background thread)")
+    print("  Weapon Detection: DISABLED")
+    print("  Fall Detection: DISABLED")
+    print("  Scream Detection: DISABLED")
+    print("-" * 60)
+    print(f"  RESIZE_WIDTH: {RESIZE_WIDTH}")
+    print(f"  SKIP_FRAMES: {SKIP_FRAMES} (YOLO only; every frame to SlowFast)")
+    print(f"  SlowFast: runs continuously in background thread")
+    print(f"  Buffer size: 16 frames")
+    print(f"  No batch accumulation (fresh frame every time)")
+    print("-" * 60)
+    print(f"  Faces folder: {FACES_DIR.resolve()}")
+    print(f"  Upload folder: {UPLOAD_DIR.resolve()}")
     print("=" * 60)
+    print("  Server starting on http://0.0.0.0:8080")
+    print("=" * 60)
+    print("")
     app.run(host="0.0.0.0", port=8080, debug=True)

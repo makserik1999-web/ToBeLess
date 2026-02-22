@@ -1,8 +1,9 @@
 """
 Video Frame Buffer for Temporal Action Recognition
 
-This module provides efficient frame buffering for SlowFast temporal analysis.
-SlowFast requires clips of 32 frames to analyze actions over time.
+# This module provides efficient frame buffering for SlowFast temporal analysis.
+# SlowFast can work with variable frame counts (default: 32 frames for standard R50 model).
+# The sampling adapts automatically to the buffer size.
 
 Classes:
     TemporalFrameBuffer: Thread-safe circular buffer for video frames
@@ -21,11 +22,11 @@ class TemporalFrameBuffer:
     Thread-safe circular buffer for storing video frames temporally
 
     SlowFast architecture requires:
-    - Slow pathway: 8 frames sampled at low temporal rate
-    - Fast pathway: 32 frames sampled at high temporal rate
+    - Slow pathway: 8 frames uniformly sampled from buffer
+    - Fast pathway: all frames in buffer
 
-    This buffer maintains a sliding window of 32 frames for continuous
-    action recognition.
+    This buffer maintains a sliding window for continuous action recognition.
+    Sampling adapts automatically to buffer size (default: 16 frames).
     """
 
     def __init__(
@@ -38,7 +39,7 @@ class TemporalFrameBuffer:
         Initialize temporal frame buffer
 
         Args:
-            buffer_size: Number of frames to buffer (default: 32 for SlowFast)
+            buffer_size: Number of frames to buffer (default: 32 for standard R50 model)
             input_size: Target frame size (height, width) for model input
             normalize: Whether to normalize frames using ImageNet stats
         """
@@ -109,6 +110,10 @@ class TemporalFrameBuffer:
 
         return frame_tensor
 
+    def _is_ready_unlocked(self) -> bool:
+        """Internal is_ready check without lock (call only when lock is held)"""
+        return len(self.preprocessed_frames) >= self.buffer_size
+
     def is_ready(self) -> bool:
         """
         Check if buffer has enough frames for inference
@@ -117,7 +122,7 @@ class TemporalFrameBuffer:
             True if buffer is full (has buffer_size frames)
         """
         with self.lock:
-            return len(self.preprocessed_frames) >= self.buffer_size
+            return self._is_ready_unlocked()
 
     def get_clip(self, device: str = 'cuda') -> Optional[List[torch.Tensor]]:
         """
@@ -126,10 +131,10 @@ class TemporalFrameBuffer:
         Returns:
             [slow_input, fast_input] tensors or None if buffer not ready
             - slow_input: (1, 3, 8, H, W)
-            - fast_input: (1, 3, 32, H, W)
+            - fast_input: (1, 3, num_frames, H, W)
         """
         with self.lock:
-            if not self.is_ready():
+            if not self._is_ready_unlocked():
                 return None
 
             # Get all frames from buffer
@@ -155,16 +160,21 @@ class TemporalFrameBuffer:
         Returns:
             (slow_input, fast_input) tuple
         """
-        # SlowFast temporal sampling:
-        # - Slow pathway: 8 frames (sample every 4th frame from 32)
-        # - Fast pathway: 32 frames (all frames)
+        # SlowFast temporal sampling (adaptive to buffer size):
+        # - Slow pathway: 8 frames uniformly sampled
+        # - Fast pathway: all frames in buffer
 
-        # Sample 8 frames for slow pathway (indices: 0, 4, 8, 12, 16, 20, 24, 28)
-        slow_indices = [i * 4 for i in range(8)]
+        num_frames = len(frames)
+
+        # For slow pathway: sample 8 frames uniformly across the buffer
+        # With 16 frames: indices 0, 2, 4, 6, 8, 10, 12, 14
+        # With 32 frames: indices 0, 4, 8, 12, 16, 20, 24, 28
+        slow_rate = max(1, num_frames // 8)
+        slow_indices = [min(i * slow_rate, num_frames - 1) for i in range(8)]
         slow_frames = [frames[i] for i in slow_indices]
 
-        # Use all 32 frames for fast pathway
-        fast_frames = frames[:self.buffer_size]
+        # Use all frames for fast pathway
+        fast_frames = frames[:num_frames]
 
         # Stack frames: (num_frames, C, H, W)
         slow_clip = torch.stack(slow_frames)
@@ -231,7 +241,7 @@ class MultiBufferManager:
 
     def __init__(
         self,
-        buffer_size: int = 32,
+        buffer_size: int = 16,
         input_size: Tuple[int, int] = (224, 224),
         max_people: int = 10
     ):
@@ -239,7 +249,7 @@ class MultiBufferManager:
         Initialize multi-buffer manager
 
         Args:
-            buffer_size: Frames per buffer
+            buffer_size: Frames per buffer (default: 16 for faster filling)
             input_size: Frame size for model
             max_people: Maximum number of people to track simultaneously
         """

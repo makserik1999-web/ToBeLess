@@ -1,256 +1,207 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>AI Fight Detection System - О проекте</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ToBeLess AI - Violence Detection System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+            padding: 60px 40px;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 3em;
+            color: #333;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .subtitle {
+            font-size: 1.2em;
+            color: #666;
+            margin-bottom: 40px;
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 40px 0;
+            text-align: left;
+        }
+
+        .feature {
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            transition: transform 0.3s;
+        }
+
+        .feature:hover {
+            transform: translateY(-5px);
+            background: #e9ecef;
+        }
+
+        .feature-icon {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .feature h3 {
+            color: #667eea;
+            margin-bottom: 8px;
+            font-size: 1.1em;
+        }
+
+        .feature p {
+            color: #666;
+            font-size: 0.9em;
+            line-height: 1.4;
+        }
+
+        .cta-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 18px 50px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-size: 1.2em;
+            font-weight: 600;
+            transition: all 0.3s;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+            margin-top: 30px;
+        }
+
+        .cta-button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 40px rgba(102, 126, 234, 0.6);
+        }
+
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            margin: 40px 0;
+            padding: 30px 0;
+            border-top: 2px solid #e9ecef;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-label {
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .badge {
+            display: inline-block;
+            background: #28a745;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-left: 10px;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2em;
+            }
+
+            .container {
+                padding: 40px 20px;
+            }
+
+            .stats {
+                flex-direction: column;
+                gap: 20px;
+            }
+        }
+    </style>
 </head>
 <body>
     <div class="container">
-        <!-- Header Section -->
-        <header class="header">
-            <h1>ToBeLess AI</h1>
-            <p>Передовая технология обнаружения насилия в режиме реального времени</p>
-            <div class="header-actions">
-                <a href="{{ url_for('detection') }}" class="btn btn-hero" target="_blank">
-                    Открыть систему детекции
-                </a>
+        <h1>ToBeLess AI <span class="badge">v2.0</span></h1>
+        <p class="subtitle">Intelligent Violence Detection System</p>
+
+        <div class="features">
+            <div class="feature">
+                <div class="feature-icon">🎯</div>
+                <h3>Hybrid Detection</h3>
+                <p>YOLO-Pose + SlowFast reduces false positives by 70-90%</p>
             </div>
-        </header>
 
-        <!-- Hero Section -->
-        <section class="hero-section card">
-            <div class="hero-grid">
-                <div class="hero-content">
-                    <div class="hero-badge">
-                        <span>AI-Powered Security</span>
-                    </div>
-                    
-                    <h2 class="hero-title">
-                        Передовая технология обнаружения насилия
-                    </h2>
-                    
-                    <p class="hero-description">
-                        Наша система использует современные алгоритмы оценки позы и компьютерного зрения 
-                        для обнаружения насильственного поведения в режиме реального времени. Разработана для 
-                        школ, общественных мест и систем безопасности.
-                    </p>
-
-                    <div class="hero-stats">
-                        <div class="hero-stat-item">
-                            <div class="hero-stat-value">91%</div>
-                            <div class="hero-stat-label">Точность</div>
-                        </div>
-                        <div class="hero-stat-item">
-                            <div class="hero-stat-value">30 FPS</div>
-                            <div class="hero-stat-label">Скорость</div>
-                        </div>
-                        <div class="hero-stat-item">
-                            <div class="hero-stat-value">&lt;9%</div>
-                            <div class="hero-stat-label">Ложные срабатывания</div>
-                        </div>
-                    </div>
-
-                    <a href="{{ url_for('detection') }}" class="btn btn-primary-large" target="_blank">
-                        Попробовать систему →
-                    </a>
-                </div>
-
-                <div class="hero-visual">
-                    <div class="hero-image-placeholder">
-                        <p>ToBeLess AI</p>
-                        <div class="demo-badge">Real-time Processing</div>
-                    </div>
-                </div>
+            <div class="feature">
+                <div class="feature-icon">⚡</div>
+                <h3>Real-time</h3>
+                <p>25-30 FPS processing on consumer GPUs</p>
             </div>
-        </section>
 
-        <!-- Features Section -->
-        <section class="features-section">
-            <h2 class="section-title">Ключевые возможности</h2>
-            <p class="section-subtitle">Что делает нашу систему уникальной</p>
-            <div class="features-grid-large">
-                <div class="feature-card card">
-                    <h3>Обработка в реальном времени</h3>
-                    <p>Мгновенное обнаружение с минимальной задержкой. Система анализирует видео поток 
-                    со скоростью 30 кадров в секунду, обеспечивая быструю реакцию на инциденты.</p>
-                    <ul class="feature-list">
-                        <li>Анализ 30 FPS</li>
-                        <li>Задержка менее 100ms</li>
-                        <li>Мгновенные уведомления</li>
-                    </ul>
-                </div>
-                
-                <div class="feature-card card">
-                    <h3>Высокая точность</h3>
-                    <p>Продвинутый ИИ с точностью обнаружения более 95%. Используем глубокое обучение 
-                    и анализ поз для минимизации ложных срабатываний.</p>
-                    <ul class="feature-list">
-                        <li>Точность 91%+</li>
-                        <li>Глубокое обучение</li>
-                        <li>Постоянное улучшение</li>
-                    </ul>
-                </div>
-                
-                <div class="feature-card card">
-                    <h3>Защита приватности</h3>
-                    <p>Обнаружение на основе поз, без распознавания лиц. Система анализирует только 
-                    движения тела, обеспечивая конфиденциальность пользователей.</p>
-                    <ul class="feature-list">
-                        <li>Без распознавания лиц</li>
-                        <li>Анализ только поз</li>
-                        <li>GDPR совместимость</li>
-                    </ul>
-                </div>
-                
-                <div class="feature-card card">
-                    <h3>Панель аналитики</h3>
-                    <p>Комплексная отчетность и инсайты. Отслеживайте статистику, просматривайте 
-                    историю инцидентов и анализируйте тренды.</p>
-                    <ul class="feature-list">
-                        <li>Детальная статистика</li>
-                        <li>История событий</li>
-                        <li>Экспорт отчетов</li>
-                    </ul>
-                </div>
+            <div class="feature">
+                <div class="feature-icon">👤</div>
+                <h3>Face Recognition</h3>
+                <p>Identify people involved in incidents</p>
             </div>
-        </section>
 
-        <!-- How It Works Section -->
-        <section class="how-it-works-section">
-            <h2 class="section-title">Как это работает</h2>
-            <p class="section-subtitle">Процесс обнаружения в 4 простых шага</p>
-            <div class="steps-grid">
-                <div class="step-card card">
-                    <div class="step-number">1</div>
-                    <h3>Захват видео</h3>
-                    <p>Система получает видео поток с камеры, веб-камеры или загруженного файла</p>
-                </div>
-                
-                <div class="step-card card">
-                    <div class="step-number">2</div>
-                    <h3>Определение поз</h3>
-                    <p>MediaPipe анализирует каждый кадр и определяет ключевые точки тела людей</p>
-                </div>
-                
-                <div class="step-card card">
-                    <div class="step-number">3</div>
-                    <h3>Анализ движений</h3>
-                    <p>ИИ анализирует близость, скорость движений и паттерны поведения</p>
-                </div>
-                
-                <div class="step-card card">
-                    <div class="step-number">4</div>
-                    <h3>Обнаружение и уведомление</h3>
-                    <p>При обнаружении насилия система отправляет мгновенное уведомление</p>
-                </div>
+            <div class="feature">
+                <div class="feature-icon">📱</div>
+                <h3>Instant Alerts</h3>
+                <p>Telegram notifications with evidence</p>
             </div>
-        </section>
+        </div>
 
-        <!-- Technology Section -->
-        <section class="technology-section card">
-            <h2 class="section-title">Технологический стек</h2>
-            <p class="section-subtitle">Передовые технологии для максимальной эффективности</p>
-            <div class="tech-grid">
-                <div class="tech-item">
-                    <h4>Python</h4>
-                    <p>Основной язык программирования для обработки и анализа данных</p>
-                </div>
-                
-                <div class="tech-item">
-                    <h4>OpenCV</h4>
-                    <p>Мощная библиотека компьютерного зрения для обработки видео</p>
-                </div>
-                
-                <div class="tech-item">
-                    <h4>MediaPipe</h4>
-                    <p>Определение поз и ключевых точек тела в реальном времени</p>
-                </div>
-                
-                <div class="tech-item">
-                    <h4>TensorFlow</h4>
-                    <p>Машинное обучение и нейронные сети для классификации</p>
-                </div>
-                
-                <div class="tech-item">
-                    <h4>Flask</h4>
-                    <p>Легковесный веб-фреймворк для создания API и интерфейса</p>
-                </div>
-                
-                <div class="tech-item">
-                    <h4>WebRTC</h4>
-                    <p>Потоковая передача видео в реальном времени через браузер</p>
-                </div>
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-number">90%+</div>
+                <div class="stat-label">Accuracy</div>
             </div>
-        </section>
-
-        <!-- Use Cases Section -->
-        <section class="use-cases-section">
-            <h2 class="section-title">Области применения</h2>
-            <p class="section-subtitle">Защита людей в различных сценариях</p>
-            <div class="use-cases-grid">
-                <div class="use-case-card card">
-                    <h3>Образовательные учреждения</h3>
-                    <p>Мониторинг школ и университетов для обеспечения безопасности учащихся. 
-                    Быстрое реагирование на конфликтные ситуации и предотвращение буллинга.</p>
-                    <ul class="use-case-list">
-                        <li>Мониторинг коридоров и столовых</li>
-                        <li>Контроль спортивных площадок</li>
-                        <li>Автоматические уведомления охраны</li>
-                    </ul>
-                </div>
-                
-                <div class="use-case-card card">
-                    <h3>Общественные пространства</h3>
-                    <p>Защита посетителей в торговых центрах, парках и транспортных узлах. 
-                    Создание безопасной среды для людей.</p>
-                    <ul class="use-case-list">
-                        <li>Торговые центры и магазины</li>
-                        <li>Парки и рекреационные зоны</li>
-                        <li>Вокзалы и аэропорты</li>
-                    </ul>
-                </div>
-                
-                <div class="use-case-card card">
-                    <h3>Системы видеонаблюдения</h3>
-                    <p>Интеграция с существующими CCTV системами. Умный анализ архивов и 
-                    автоматическое обнаружение инцидентов.</p>
-                    <ul class="use-case-list">
-                        <li>Интеграция с IP-камерами</li>
-                        <li>Анализ архивных записей</li>
-                        <li>Облачное хранение событий</li>
-                    </ul>
-                </div>
-                
-                <div class="use-case-card card">
-                    <h3>Службы безопасности</h3>
-                    <p>Помощь сотрудникам охраны в мониторинге больших территорий. 
-                    Приоритизация реагирования на критические ситуации.</p>
-                    <ul class="use-case-list">
-                        <li>Мониторинг периметра</li>
-                        <li>Интеграция с системами тревоги</li>
-                        <li>Отчетность для служб безопасности</li>
-                    </ul>
-                </div>
+            <div class="stat">
+                <div class="stat-number">70-90%</div>
+                <div class="stat-label">Fewer False Positives</div>
             </div>
-        </section>
-
-        <!-- CTA Section -->
-        <section class="cta-section card">
-            <div class="cta-content">
-                <h2>Готовы попробовать систему?</h2>
-                <p>Откройте систему детекции и протестируйте на собственном видео или веб-камере</p>
-                <a href="{{ url_for('detection') }}" class="btn btn-cta" target="_blank">
-                    Запустить детекцию →
-                </a>
+            <div class="stat">
+                <div class="stat-number">30 FPS</div>
+                <div class="stat-label">Real-time Speed</div>
             </div>
-        </section>
+        </div>
 
-        <!-- Footer -->
-        <footer class="footer">
-            <p>© 2025 AI Fight Detection System. Передовая технология для безопасного будущего.</p>
-        </footer>
+        <a href="/detection" class="cta-button">Start Detection →</a>
+
+        <div style="margin-top: 40px; color: #999; font-size: 0.9em;">
+            <p>Powered by YOLO v8 + SlowFast R50 + PyTorch</p>
+            <p style="margin-top: 10px;">Distinguishes fights from hugs, crowds, and sports</p>
+        </div>
     </div>
 </body>
 </html>

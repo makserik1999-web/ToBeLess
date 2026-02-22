@@ -1,0 +1,17 @@
+{
+  "meta": {
+    "generated_at": "2026-01-24T17:17:25.827505",
+    "company": "ToBeLess AI Security",
+    "period_start": "2026-01-23T17:17:25.827456",
+    "period_end": "2026-01-24T17:17:25.827466"
+  },
+  "statistics": {
+    "fight_detections": 0,
+    "weapon_detections": 0,
+    "fall_detections": 0,
+    "scream_detections": 0
+  },
+  "events": [],
+  "hourly_stats": [],
+  "type_stats": []
+}

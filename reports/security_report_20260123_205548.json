@@ -1,0 +1,38 @@
+{
+  "meta": {
+    "generated_at": "2026-01-23T20:55:48.086307",
+    "company": "ToBeLess AI Security",
+    "period_start": "2026-01-22T20:55:48.086266",
+    "period_end": "2026-01-23T20:55:48.086274"
+  },
+  "statistics": {
+    "fight_detections": 1,
+    "weapon_detections": 0,
+    "fall_detections": 0,
+    "scream_detections": 0
+  },
+  "events": [
+    {
+      "type": "fight",
+      "confidence": 0.0,
+      "timestamp": "2026-01-23T20:55:04.065650",
+      "details": "People involved: 3"
+    }
+  ],
+  "hourly_stats": [
+    {
+      "hour": "20:00",
+      "total": 1,
+      "fights": 1,
+      "weapons": 0,
+      "falls": 0,
+      "screams": 0
+    }
+  ],
+  "type_stats": [
+    {
+      "type": "fight",
+      "count": 1
+    }
+  ]
+}
