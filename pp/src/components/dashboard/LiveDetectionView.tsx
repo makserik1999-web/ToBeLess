@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'motion/react';
 import {
   X,
@@ -13,12 +13,23 @@ import {
   Sword,
   PersonStanding,
   Volume2,
-  Settings
 } from 'lucide-react';
 import { useTheme } from '../Dashboard';
 import { streamApi } from '../../api/stream';
 import { apiClient } from '../../api/client';
-import { detectionApi } from '../../api/detection';
+import { detectionApi, DetectionMode, PrivacyMode } from '../../api/detection';
+
+const DETECTION_MODE_OPTIONS: { value: DetectionMode; label: string; note?: string }[] = [
+  { value: 'fight',  label: '🥊 Fight Detection' },
+  { value: 'weapon', label: '🔫 Weapon Detection' },
+  { value: 'scream', label: '🔊 Scream Detection', note: 'Requires video upload (not live stream)' },
+];
+
+const PRIVACY_MODE_OPTIONS: { value: PrivacyMode; label: string }[] = [
+  { value: 'off',         label: '🚫 Off' },
+  { value: 'recognition', label: '👤 Face Recognition' },
+  { value: 'blur',        label: '👁️ Face Blur' },
+];
 
 interface LiveDetectionViewProps {
   isOpen: boolean;
@@ -37,12 +48,6 @@ interface Stats {
   timestamp?: number;
 }
 
-interface DetectionToggles {
-  weapon: boolean;
-  fall: boolean;
-  scream: boolean;
-}
-
 export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionViewProps) {
   const { theme } = useTheme();
   const [stats, setStats] = useState<Stats>({
@@ -56,13 +61,17 @@ export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionV
   });
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [toggles, setToggles] = useState<DetectionToggles>({
-    weapon: true,
-    fall: true,
-    scream: false
-  });
+  const [detectionMode, setDetectionMode] = useState<DetectionMode>('fight');
+  const [privacyMode, setPrivacyMode] = useState<PrivacyMode>('off');
+  const [events, setEvents] = useState<any[]>([]);
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  const loadEvents = useCallback(async () => {
+    try {
+      const data = await detectionApi.getEvents();
+      if (data.success) setEvents([...data.events].reverse().slice(0, 40));
+    } catch { /* ignore */ }
+  }, []);
   const [feedKey, setFeedKey] = useState(Date.now());
   const videoFeedUrl = `${apiClient.getStreamUrl('/video_feed')}?t=${feedKey}`;
 
@@ -84,21 +93,19 @@ export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionV
       fps: 0,
     });
 
-    const loadDetectionStatus = async () => {
+    const loadModes = async () => {
       try {
-        const status = await detectionApi.getStatus();
-        if (status.success) {
-          setToggles({
-            weapon: status.weapon_detection,
-            fall: status.fall_detection,
-            scream: status.scream_detection
-          });
-        }
+        const [dm, pm] = await Promise.all([
+          detectionApi.getDetectionMode(),
+          detectionApi.getPrivacyMode(),
+        ]);
+        if (dm.success && dm.mode) setDetectionMode(dm.mode as DetectionMode);
+        if (pm.success && pm.mode) setPrivacyMode(pm.mode as PrivacyMode);
       } catch (err) {
-        console.error('Error loading detection status:', err);
+        console.error('Error loading detection modes:', err);
       }
     };
-    loadDetectionStatus();
+    loadModes();
   }, [isOpen, streamKey]);
 
   // Connect to SSE stats stream
@@ -140,6 +147,14 @@ export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionV
     };
   }, [isOpen]);
 
+  // Load events on open, then auto-refresh every 15 s
+  useEffect(() => {
+    if (!isOpen) return;
+    void loadEvents();
+    const id = setInterval(() => { void loadEvents(); }, 15000);
+    return () => clearInterval(id);
+  }, [isOpen, loadEvents]);
+
   const handleStop = async () => {
     setIsStopping(true);
     try {
@@ -158,37 +173,38 @@ export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionV
     setIsFullscreen(!isFullscreen);
   };
 
-  const handleToggleWeapon = async () => {
+  const handleDetectionModeChange = async (mode: DetectionMode) => {
     try {
-      const result = await detectionApi.toggleWeaponDetection();
-      if (result.success && result.weapon_detection_enabled !== undefined) {
-        setToggles(prev => ({ ...prev, weapon: result.weapon_detection_enabled! }));
-      }
+      const result = await detectionApi.setDetectionMode(mode);
+      if (result.success) setDetectionMode(mode);
     } catch (err) {
-      console.error('Error toggling weapon detection:', err);
+      console.error('Error setting detection mode:', err);
     }
   };
 
-  const handleToggleFall = async () => {
+  const handlePrivacyModeChange = async (mode: PrivacyMode) => {
     try {
-      const result = await detectionApi.toggleFallDetection();
-      if (result.success && result.fall_detection_enabled !== undefined) {
-        setToggles(prev => ({ ...prev, fall: result.fall_detection_enabled! }));
-      }
+      const result = await detectionApi.setPrivacyMode(mode);
+      if (result.success) setPrivacyMode(mode);
     } catch (err) {
-      console.error('Error toggling fall detection:', err);
+      console.error('Error setting privacy mode:', err);
     }
   };
 
-  const handleToggleScream = async () => {
+  const handleGenerateReport = async (format: 'pdf' | 'excel' | 'json') => {
     try {
-      const result = await detectionApi.toggleScreamDetection();
-      if (result.success && result.scream_detection_enabled !== undefined) {
-        setToggles(prev => ({ ...prev, scream: result.scream_detection_enabled! }));
+      const result = await detectionApi.generateReport(format);
+      if (result.success && result.filename) {
+        window.location.href = detectionApi.getReportDownloadUrl(result.filename);
       }
     } catch (err) {
-      console.error('Error toggling scream detection:', err);
+      console.error('Error generating report:', err);
     }
+  };
+
+  const handleClearEvents = async () => {
+    await detectionApi.clearEvents();
+    setEvents([]);
   };
 
   if (!isOpen) return null;
@@ -263,20 +279,6 @@ export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionV
                 {hasFight ? 'ALERT: Fight' : hasWeapon ? 'ALERT: Weapon' : hasFall ? 'ALERT: Fall' : hasScream ? 'ALERT: Scream' : 'Monitoring'}
               </div>
 
-              {/* Settings Button */}
-              <button
-                onClick={() => setShowSettings(!showSettings)}
-                className={`p-3 rounded-xl transition-colors ${
-                  showSettings
-                    ? 'bg-purple-600 text-white'
-                    : theme === 'light'
-                    ? 'hover:bg-purple-100 text-zinc-600'
-                    : 'hover:bg-zinc-800 text-zinc-400'
-                }`}
-              >
-                <Settings className="w-5 h-5" />
-              </button>
-
               <button
                 onClick={toggleFullscreen}
                 className={`p-3 rounded-xl transition-colors ${
@@ -335,7 +337,7 @@ export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionV
                   src={videoFeedUrl}
                   alt="Live Detection Feed"
                   className="w-full h-full object-contain"
-                  onError={(e) => {
+                  onError={() => {
                     console.error('Video feed error');
                   }}
                 />
@@ -652,77 +654,135 @@ export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionV
                   </motion.div>
                 )}
 
-                {/* Settings Panel */}
-                {showSettings && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className={`p-4 rounded-2xl border-2 ${
-                      theme === 'light'
-                        ? 'bg-white border-purple-200'
-                        : 'bg-zinc-950 border-zinc-800'
-                    }`}
-                  >
-                    <h3 className={`text-sm font-semibold mb-3 ${
-                      theme === 'light' ? 'text-zinc-900' : 'text-white'
-                    }`}>Detection Modules</h3>
+                {/* Detection Mode Selector */}
+                <div className={`p-4 rounded-2xl border-2 ${
+                  theme === 'light' ? 'bg-white border-purple-200' : 'bg-zinc-950 border-zinc-800'
+                }`}>
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
+                    Detection Mode
+                  </h3>
+                  <div className="flex flex-col gap-1">
+                    {DETECTION_MODE_OPTIONS.map(({ value, label, note }) => (
+                      <button
+                        key={value}
+                        onClick={() => handleDetectionModeChange(value)}
+                        className={`px-3 py-2 rounded-xl text-sm font-medium text-left transition-all ${
+                          detectionMode === value
+                            ? 'bg-purple-600 text-white'
+                            : theme === 'light'
+                            ? 'text-zinc-600 hover:bg-purple-50'
+                            : 'text-zinc-400 hover:bg-zinc-800'
+                        }`}
+                      >
+                        {label}
+                        {note && (
+                          <span className={`block text-xs font-normal mt-0.5 ${
+                            detectionMode === value ? 'text-white/70' : 'opacity-50'
+                          }`}>
+                            {note}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-                    <div className="space-y-3">
-                      {/* Weapon Detection Toggle */}
-                      <div className="flex items-center justify-between">
-                        <span className={`text-sm ${theme === 'light' ? 'text-zinc-700' : 'text-zinc-300'}`}>
-                          Weapon Detection
-                        </span>
-                        <button
-                          onClick={handleToggleWeapon}
-                          className={`w-12 h-6 rounded-full transition-colors relative ${
-                            toggles.weapon ? 'bg-purple-600' : 'bg-zinc-600'
-                          }`}
-                        >
-                          <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all ${
-                            toggles.weapon ? 'left-6' : 'left-0.5'
-                          }`}></div>
-                        </button>
-                      </div>
+                {/* Privacy Mode Selector */}
+                <div className={`p-4 rounded-2xl border-2 ${
+                  theme === 'light' ? 'bg-white border-purple-200' : 'bg-zinc-950 border-zinc-800'
+                }`}>
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
+                    Privacy Mode
+                  </h3>
+                  <div className="flex flex-col gap-1">
+                    {PRIVACY_MODE_OPTIONS.map(({ value, label }) => (
+                      <button
+                        key={value}
+                        onClick={() => handlePrivacyModeChange(value)}
+                        className={`px-3 py-2 rounded-xl text-sm font-medium text-left transition-all ${
+                          privacyMode === value
+                            ? 'bg-purple-600 text-white'
+                            : theme === 'light'
+                            ? 'text-zinc-600 hover:bg-purple-50'
+                            : 'text-zinc-400 hover:bg-zinc-800'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-                      {/* Fall Detection Toggle */}
-                      <div className="flex items-center justify-between">
-                        <span className={`text-sm ${theme === 'light' ? 'text-zinc-700' : 'text-zinc-300'}`}>
-                          Fall Detection
-                        </span>
-                        <button
-                          onClick={handleToggleFall}
-                          className={`w-12 h-6 rounded-full transition-colors relative ${
-                            toggles.fall ? 'bg-purple-600' : 'bg-zinc-600'
-                          }`}
-                        >
-                          <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all ${
-                            toggles.fall ? 'left-6' : 'left-0.5'
-                          }`}></div>
-                        </button>
-                      </div>
+                {/* Reports & Recent Events */}
+                <div className={`p-4 rounded-2xl border-2 ${
+                  theme === 'light' ? 'bg-white border-purple-200' : 'bg-zinc-950 border-zinc-800'
+                }`}>
+                  {/* Report download buttons */}
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">
+                    Reports
+                  </h3>
+                  <div className="flex flex-col gap-1 mb-4">
+                    {(['pdf', 'excel', 'json'] as const).map(fmt => (
+                      <button
+                        key={fmt}
+                        onClick={() => handleGenerateReport(fmt)}
+                        className={`px-3 py-2 rounded-xl text-sm font-medium text-left transition-all ${
+                          theme === 'light'
+                            ? 'bg-purple-50 text-purple-700 hover:bg-purple-100'
+                            : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
+                        }`}
+                      >
+                        ↓ Download {fmt.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
 
-                      {/* Scream Detection Toggle */}
-                      <div className="flex items-center justify-between">
-                        <span className={`text-sm ${theme === 'light' ? 'text-zinc-700' : 'text-zinc-300'}`}>
-                          Scream Detection
-                        </span>
-                        <button
-                          onClick={handleToggleScream}
-                          className={`w-12 h-6 rounded-full transition-colors relative ${
-                            toggles.scream ? 'bg-purple-600' : 'bg-zinc-600'
-                          }`}
-                        >
-                          <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all ${
-                            toggles.scream ? 'left-6' : 'left-0.5'
-                          }`}></div>
-                        </button>
-                      </div>
+                  {/* Recent Events list */}
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                      Recent Events
+                    </span>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => { void loadEvents(); }}
+                        className={`text-xs px-2 py-1 rounded-lg transition-colors ${
+                          theme === 'light' ? 'bg-purple-50 text-zinc-600 hover:bg-purple-100' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                        }`}
+                      >↻</button>
+                      <button
+                        onClick={handleClearEvents}
+                        className={`text-xs px-2 py-1 rounded-lg transition-colors ${
+                          theme === 'light' ? 'bg-red-50 text-red-500 hover:bg-red-100' : 'bg-zinc-800 text-red-400 hover:bg-zinc-700'
+                        }`}
+                      >Clear</button>
                     </div>
+                  </div>
 
-                  </motion.div>
-                )}
+                  <div className="max-h-48 overflow-y-auto space-y-0.5">
+                    {events.length === 0 ? (
+                      <p className="text-xs text-zinc-500 text-center py-4">No events yet</p>
+                    ) : (
+                      events.map((ev, i) => {
+                        const icon: Record<string, string> = { fight: '🚨', weapon: '🔫', scream: '🔊', fall: '🫸' };
+                        const color: Record<string, string> = { fight: 'text-red-400', weapon: 'text-orange-400', scream: 'text-yellow-400', fall: 'text-blue-400' };
+                        const ts = ev.timestamp ? String(ev.timestamp).slice(11, 19) : '';
+                        const conf = ev.confidence != null ? ` ${Math.round(Number(ev.confidence) * 100)}%` : '';
+                        return (
+                          <div key={i} className="flex items-center gap-2 text-xs py-1.5 border-b border-zinc-800/50 last:border-0">
+                            <span>{icon[ev.type] ?? '⚠️'}</span>
+                            <span className="text-zinc-500 min-w-[50px] tabular-nums">{ts}</span>
+                            <span className={`font-medium flex-1 ${color[ev.type] ?? 'text-zinc-300'}`}>
+                              {ev.type}{conf}
+                            </span>
+                            {ev.details && (
+                              <span className="text-zinc-600 truncate max-w-[72px] text-[10px]">{ev.details}</span>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
 
                 {/* Stop Button - Always visible at bottom of stats */}
                 <button

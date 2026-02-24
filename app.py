@@ -20,6 +20,7 @@ face_rec = FaceRecognizer(yolo_model_path="yolov8n-face.pt", db_path="faces/embe
 face_rec.bulk_register_from_folder("faces/images")
 face_blur_enabled = False
 face_recognition_enabled = False  # DISABLED by default for performance (enable via API)
+current_detection_mode = 'fight'  # 'fight' | 'weapon' | 'scream'
 
 import os, time, uuid, json, threading, traceback
 from pathlib import Path
@@ -753,7 +754,7 @@ def processing_loop(source_is_file=False, job_id=None):
     global detector, weapon_detector, fall_detector, scream_detector
     global video_cap, current_frame, stream_active
     global last_alert_time, last_weapon_alert_time, last_fall_alert_time, last_scream_alert_time
-    global detection_events, profiler
+    global detection_events, profiler, current_detection_mode
 
     frame_count = 0
     processed = 0
@@ -811,17 +812,20 @@ def processing_loop(source_is_file=False, job_id=None):
             out_frame = None
             metrics = {}
 
-            # EVERY frame goes to hybrid detector (for temporal buffer + rendering)
-            # YOLO only runs when run_yolo=True
-            with profiler.time_function('hybrid_detection'):
-                try:
-                    out_frame, metrics = detector.process_frame(frame, frame_count, run_yolo=run_yolo)
-                except Exception as e:
-                    out_frame = frame.copy()
-                    metrics = {}
+            if current_detection_mode == 'fight':
+                # Full hybrid detection (pose + SlowFast action recognition)
+                with profiler.time_function('hybrid_detection'):
+                    try:
+                        out_frame, metrics = detector.process_frame(frame, frame_count, run_yolo=run_yolo)
+                    except Exception as e:
+                        out_frame = frame.copy()
+                        metrics = {}
+            else:
+                # Weapon / Scream mode: skip fight pipeline for speed
+                out_frame = frame.copy()
 
-            # Fight alerting
-            if detector.fight_detected and (time.time() - last_alert_time > ALERT_COOLDOWN):
+            # Fight alerting (only in fight mode)
+            if current_detection_mode == 'fight' and detector.fight_detected and (time.time() - last_alert_time > ALERT_COOLDOWN):
                 snap = UPLOAD_DIR / f"alert_{int(time.time())}.jpg"
                 try:
                     cv2.imwrite(str(snap), out_frame)
@@ -861,10 +865,12 @@ def processing_loop(source_is_file=False, job_id=None):
                     _send_alert_nonblocking(f"👤 Known person detected: {name}")
                     face_seen_times[name] = time.time()
 
-            # Weapon detection (every 5 frames to save GPU budget)
-            if weapon_detection_enabled and weapon_detector is not None and out_frame is not None:
+            # Weapon detection (every 3 frames in weapon mode, every 5 in fight mode, off in scream mode)
+            weapon_interval = 3 if current_detection_mode == 'weapon' else 5
+            if weapon_detection_enabled and weapon_detector is not None and out_frame is not None \
+                    and current_detection_mode != 'scream':
                 weapon_frame_counter += 1
-                if weapon_frame_counter >= 5:
+                if weapon_frame_counter >= weapon_interval:
                     weapon_frame_counter = 0
                     try:
                         w_dets = weapon_detector.detect(out_frame)
@@ -1186,11 +1192,11 @@ def start_stream():
         if detector:
             detector.reset_statistics()
         if weapon_detector:
-            weapon_detector.stats = {'total_detections': 0}
+            weapon_detector.reset_statistics()
         if fall_detector:
-            fall_detector.stats = {'total_falls_detected': 0}
+            fall_detector.reset_statistics()
         if scream_detector:
-            scream_detector.stats = {'total_screams_detected': 0}
+            scream_detector.reset_statistics()
 
         stream_active = True
         proc_thread = threading.Thread(target=processing_loop, args=(source_is_file, job_id), daemon=True)
@@ -1745,6 +1751,49 @@ def detection_status():
             'screams': scream_detector.stats['total_screams_detected'] if scream_detector else 0
         }
     })
+
+
+# ============ Detection Mode / Privacy Mode Endpoints ============
+
+@app.route('/set_detection_mode', methods=['POST'])
+def set_detection_mode():
+    global current_detection_mode
+    data = request.get_json(silent=True) or {}
+    mode = data.get('mode', 'fight')
+    if mode not in ('fight', 'weapon', 'scream'):
+        return jsonify({'success': False, 'error': 'Invalid mode'})
+    current_detection_mode = mode
+    print(f"[Mode] Detection mode → {mode}")
+    return jsonify({'success': True, 'mode': mode})
+
+
+@app.route('/get_detection_mode')
+def get_detection_mode():
+    return jsonify({'success': True, 'mode': current_detection_mode})
+
+
+@app.route('/set_privacy_mode', methods=['POST'])
+def set_privacy_mode():
+    global face_recognition_enabled, face_blur_enabled
+    data = request.get_json(silent=True) or {}
+    mode = data.get('mode', 'off')
+    if mode not in ('off', 'recognition', 'blur'):
+        return jsonify({'success': False, 'error': 'Invalid mode'})
+    face_recognition_enabled = (mode == 'recognition')
+    face_blur_enabled = (mode == 'blur')
+    print(f"[Mode] Privacy mode → {mode}")
+    return jsonify({
+        'success': True,
+        'mode': mode,
+        'face_recognition_enabled': face_recognition_enabled,
+        'face_blur_enabled': face_blur_enabled
+    })
+
+
+@app.route('/get_privacy_mode')
+def get_privacy_mode():
+    mode = 'recognition' if face_recognition_enabled else ('blur' if face_blur_enabled else 'off')
+    return jsonify({'success': True, 'mode': mode})
 
 
 if __name__ == "__main__":

@@ -27,7 +27,10 @@
       "Bash(cd:*)",
       "Bash(git commit -m \"$\\(cat <<''EOF''\nfeat: Add multi-modal detection suite and React dashboard v2.5\n\nDetection Modules:\n- Weapon detection \\(gun, knife, dangerous objects\\)\n- Fall detection \\(elderly/medical emergency\\)\n- Scream detection \\(audio-based distress\\)\n- Hybrid fight detector improvements \\(fix false positives on hugs\\)\n\nReact Dashboard \\(pp/\\):\n- LiveDetectionView with detection toggles\n- AddCameraModal with stream reset handling\n- Toast notifications across all components\n- Video stream caching fix\n\nBackend Improvements:\n- Reset detector stats on new stream start\n- Clear current_frame on stream stop\n- Detection status API endpoints\n- Report generation \\(PDF/Excel/JSON\\)\n\nDocumentation:\n- PROJECT.md updated to v2.5 with full documentation\n- CLAUDE.md updated with new module information\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(python:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(npx tsc:*)",
+      "Bash(netstat:*)",
+      "Bash(grep:*)"
     ]
   }
 }

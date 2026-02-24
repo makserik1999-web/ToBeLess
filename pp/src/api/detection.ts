@@ -12,6 +12,17 @@ export interface ToggleResponse {
   face_blur_enabled?: boolean;
 }
 
+export type DetectionMode = 'fight' | 'weapon' | 'scream';
+export type PrivacyMode = 'off' | 'recognition' | 'blur';
+
+export interface ModeResponse {
+  success: boolean;
+  mode?: string;
+  face_recognition_enabled?: boolean;
+  face_blur_enabled?: boolean;
+  error?: string;
+}
+
 export const detectionApi = {
   // Get detection module status
   async getStatus(): Promise<DetectionStatus> {
@@ -71,5 +82,27 @@ export const detectionApi = {
   async clearEvents(): Promise<{ success: boolean }> {
     const response = await apiClient.post<{ success: boolean }>('/clear_events');
     return response.data || { success: false };
-  }
+  },
+
+  // Detection mode
+  async setDetectionMode(mode: DetectionMode): Promise<ModeResponse> {
+    const response = await apiClient.post<ModeResponse>('/set_detection_mode', { mode });
+    return response.data || { success: false };
+  },
+
+  async getDetectionMode(): Promise<ModeResponse> {
+    const response = await apiClient.get<ModeResponse>('/get_detection_mode');
+    return response.data || { success: false };
+  },
+
+  // Privacy mode
+  async setPrivacyMode(mode: PrivacyMode): Promise<ModeResponse> {
+    const response = await apiClient.post<ModeResponse>('/set_privacy_mode', { mode });
+    return response.data || { success: false };
+  },
+
+  async getPrivacyMode(): Promise<ModeResponse> {
+    const response = await apiClient.get<ModeResponse>('/get_privacy_mode');
+    return response.data || { success: false };
+  },
 };
