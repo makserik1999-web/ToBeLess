@@ -695,7 +695,7 @@ report_gen = ReportGenerator(output_dir="reports", company_name="ToBeLess AI Sec
 # Detection toggles
 weapon_detection_enabled = True
 fall_detection_enabled = True
-scream_detection_enabled = False  # Requires microphone, disabled by default
+scream_detection_enabled = True   # Enabled by default (requires microphone)
 
 # Event storage for reports
 detection_events = []
@@ -766,6 +766,8 @@ def processing_loop(source_is_file=False, job_id=None):
 
     # Per-person face-sighting cooldown {name: last_alert_timestamp}
     face_seen_times: dict = {}
+    # Weapon detection runs every N frames to keep FPS up
+    weapon_frame_counter = 0
 
     # Reset profiler for new session
     profiler.reset()
@@ -858,6 +860,56 @@ def processing_loop(source_is_file=False, job_id=None):
                 if time.time() - face_seen_times.get(name, 0) > face_alert_cooldown:
                     _send_alert_nonblocking(f"👤 Known person detected: {name}")
                     face_seen_times[name] = time.time()
+
+            # Weapon detection (every 5 frames to save GPU budget)
+            if weapon_detection_enabled and weapon_detector is not None and out_frame is not None:
+                weapon_frame_counter += 1
+                if weapon_frame_counter >= 5:
+                    weapon_frame_counter = 0
+                    try:
+                        w_dets = weapon_detector.detect(out_frame)
+                        if w_dets:
+                            out_frame = weapon_detector.draw_detections(out_frame, w_dets)
+                            if time.time() - last_weapon_alert_time > ALERT_COOLDOWN:
+                                worst = max(w_dets, key=lambda d: d['confidence'])
+                                txt = f"🔫 Weapon: {worst['class_name']} ({worst['confidence']:.0%})"
+                                snap_w = UPLOAD_DIR / f"weapon_{int(time.time())}.jpg"
+                                try:
+                                    cv2.imwrite(str(snap_w), out_frame)
+                                    snap_w_path = str(snap_w)
+                                except Exception:
+                                    snap_w_path = None
+                                _send_alert_nonblocking(txt, snap_w_path, caption=txt)
+                                last_weapon_alert_time = time.time()
+                                with detection_events_lock:
+                                    detection_events.append({
+                                        'type': 'weapon',
+                                        'confidence': worst['confidence'],
+                                        'timestamp': datetime.now().isoformat(),
+                                        'details': f"{worst['class_name']} (danger: {worst['danger_level']})"
+                                    })
+                    except Exception as e:
+                        print(f"[weapon] {e}")
+
+            # Scream detection events — drain the audio queue
+            if scream_detector is not None:
+                try:
+                    while True:
+                        evt = scream_detector.detection_queue.get_nowait()
+                        if time.time() - last_scream_alert_time > ALERT_COOLDOWN:
+                            score = evt.get('score', 0)
+                            txt = f"🔊 Scream detected! score={score:.2f}"
+                            _send_alert_nonblocking(txt)
+                            last_scream_alert_time = time.time()
+                        with detection_events_lock:
+                            detection_events.append({
+                                'type': 'scream',
+                                'confidence': evt.get('score', 0),
+                                'timestamp': evt.get('timestamp', datetime.now().isoformat()),
+                                'details': f"volume: {evt.get('volume', 0):.2f}"
+                            })
+                except Exception:
+                    pass  # queue.Empty — no events
 
             # Frame update and stats (profiled)
             with profiler.time_function('frame_update'):
@@ -1040,19 +1092,18 @@ def start_stream():
         except Exception as e:
             return jsonify({'success': False, 'error': f'Failed to init detector: {e}'})
 
-    # STABLE BASELINE: Weapon detector DISABLED for stability
-    # if weapon_detector is None and weapon_detection_enabled:
-    #     try:
-    #         weapon_detector = WeaponDetector(
-    #             model_path="yolov8n.pt",
-    #             confidence_threshold=0.5,
-    #             device='cuda' if detector and hasattr(detector, 'device') else 'cpu',
-    #             debug=True
-    #         )
-    #         print("[App] ✓ Weapon detector initialized")
-    #     except Exception as e:
-    #         print(f"[App] Weapon detector init failed: {e}")
-    print("[App] Weapon detector DISABLED (stable baseline)")
+    if weapon_detector is None and weapon_detection_enabled:
+        try:
+            dev = detector.device if detector and hasattr(detector, 'device') else 'cpu'
+            weapon_detector = WeaponDetector(
+                model_path="yolov8n.pt",
+                confidence_threshold=0.5,
+                device=dev,
+                debug=False
+            )
+            print(f"[App] ✓ Weapon detector initialized on {dev}")
+        except Exception as e:
+            print(f"[App] Weapon detector init failed: {e}")
 
     # STABLE BASELINE: Fall detector DISABLED for stability
     # if fall_detector is None and fall_detection_enabled:

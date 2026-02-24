@@ -501,6 +501,19 @@
                         <button class="btn btn-secondary" onclick="generateReport('excel')">Download Excel Report</button>
                         <button class="btn btn-secondary" onclick="generateReport('json')">Download JSON Report</button>
                     </div>
+
+                    <div style="margin-top: 14px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <span style="font-size:0.82rem; font-weight:600; color:var(--text-secondary);">Recent Events</span>
+                            <div style="display:flex; gap:5px;">
+                                <button onclick="loadRecentEvents()" style="background:none;border:1px solid rgba(255,255,255,0.15);color:var(--text-secondary);border-radius:4px;padding:2px 7px;cursor:pointer;font-size:0.75rem;">↻</button>
+                                <button onclick="clearEvents()" style="background:none;border:1px solid rgba(248,113,113,0.4);color:#f87171;border-radius:4px;padding:2px 7px;cursor:pointer;font-size:0.75rem;">Clear</button>
+                            </div>
+                        </div>
+                        <div id="eventsList" style="max-height:240px;overflow-y:auto;font-size:0.78rem;line-height:1.4;">
+                            <div id="eventsPlaceholder" style="color:var(--text-secondary);text-align:center;padding:12px 0;">No events yet</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -838,6 +851,48 @@
                 console.error('Failed to load feature status');
             }
         };
+
+        // ---- Recent Events ----
+        const EVENT_ICONS = { fight: '🚨', weapon: '🔫', scream: '🔊', fall: '🫸' };
+        const EVENT_COLORS = { fight: '#f87171', weapon: '#fb923c', scream: '#facc15', fall: '#60a5fa' };
+
+        async function loadRecentEvents() {
+            try {
+                const resp = await fetch('/detection_events');
+                const data = await resp.json();
+                const list = document.getElementById('eventsList');
+                const ph   = document.getElementById('eventsPlaceholder');
+
+                if (!data.events || data.events.length === 0) {
+                    list.innerHTML = '<div id="eventsPlaceholder" style="color:var(--text-secondary);text-align:center;padding:12px 0;">No events yet</div>';
+                    return;
+                }
+
+                const recent = data.events.slice(-40).reverse();
+                list.innerHTML = recent.map(ev => {
+                    const icon  = EVENT_ICONS[ev.type] || '⚠️';
+                    const color = EVENT_COLORS[ev.type] || '#e2e8f0';
+                    const ts    = ev.timestamp ? ev.timestamp.slice(11, 19) : '';
+                    const conf  = (ev.confidence != null) ? ` ${(ev.confidence * 100).toFixed(0)}%` : '';
+                    const det   = ev.details ? `<span style="color:rgba(255,255,255,0.35);font-size:0.72rem;"> · ${ev.details}</span>` : '';
+                    return `<div style="display:flex;align-items:center;gap:6px;padding:4px 2px;border-bottom:1px solid rgba(255,255,255,0.05);">
+                        <span>${icon}</span>
+                        <span style="color:rgba(255,255,255,0.35);min-width:52px;">${ts}</span>
+                        <span style="color:${color};flex:1;font-weight:500;">${ev.type}${conf}</span>
+                        ${det}
+                    </div>`;
+                }).join('');
+            } catch (e) { /* ignore */ }
+        }
+
+        async function clearEvents() {
+            await fetch('/clear_events', { method: 'POST' });
+            loadRecentEvents();
+        }
+
+        // Auto-refresh every 15 s; initial load after 2 s
+        setInterval(loadRecentEvents, 15000);
+        setTimeout(loadRecentEvents, 2000);
     </script>
 </body>
 </html>
