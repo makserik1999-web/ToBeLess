@@ -801,6 +801,11 @@ def processing_loop(source_is_file=False, job_id=None):
             frame_count += 1
             profiler.frame_count += 1
 
+            # Video file scream detection: check audio volume at current position
+            if source_is_file and scream_detector is not None:
+                pos_sec = video_cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+                scream_detector.process_video_frame(pos_sec)
+
             # YOLO runs on selected frames; every frame goes to hybrid (for SlowFast buffer)
             run_yolo = (SKIP_FRAMES <= 1) or (frame_count % SKIP_FRAMES == 0)
 
@@ -1197,6 +1202,11 @@ def start_stream():
             fall_detector.reset_statistics()
         if scream_detector:
             scream_detector.reset_statistics()
+
+        # Pre-load audio from video file for scream detection
+        # (MUST be after reset_statistics, which would clear _video_mode)
+        if source_is_file and scream_detection_enabled and scream_detector is not None:
+            scream_detector.load_video_audio(source)
 
         stream_active = True
         proc_thread = threading.Thread(target=processing_loop, args=(source_is_file, job_id), daemon=True)

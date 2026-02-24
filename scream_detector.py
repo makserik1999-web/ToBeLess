@@ -99,6 +99,12 @@ class ScreamDetector:
         # Detection queue for thread communication
         self.detection_queue = queue.Queue()
 
+        # Video file mode state (pre-loaded audio)
+        self._video_mode = False
+        self._video_rms_times = None
+        self._video_rms_values = None
+        self._video_threshold = 0.08
+
         if self.debug:
             print(f"[ScreamDetector] Initialized with sample_rate={sample_rate}, chunk_size={chunk_size}")
             print(f"[ScreamDetector] pyaudio available: {PYAUDIO_AVAILABLE}")
@@ -363,6 +369,87 @@ class ScreamDetector:
         """Get detection statistics"""
         return self.stats.copy()
 
+    # ------------------------------------------------------------------
+    # Video file mode: pre-load audio and check volume per frame
+    # ------------------------------------------------------------------
+
+    def load_video_audio(self, video_path: str) -> bool:
+        """
+        Pre-load audio from a video file for offline scream detection.
+        Simple rule: RMS volume > auto-calibrated threshold  →  scream.
+
+        Args:
+            video_path: Path to video file (mp4, avi, etc.)
+
+        Returns:
+            True if audio was loaded successfully
+        """
+        if not LIBROSA_AVAILABLE:
+            print("[ScreamDetector] librosa not available – cannot load video audio")
+            return False
+        try:
+            print(f"[ScreamDetector] Loading audio from {video_path} ...")
+            y, sr = librosa.load(video_path, sr=22050, mono=True)
+
+            # Compute RMS in 0.25-s windows
+            hop = int(sr * 0.25)
+            frame_length = int(sr * 0.5)
+            rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop)[0]
+            times = librosa.frames_to_time(np.arange(len(rms)), sr=sr, hop_length=hop)
+
+            # Auto-calibrate threshold: mean + 3*std (catches unusually loud peaks)
+            mean_rms = float(rms.mean())
+            std_rms = float(rms.std())
+            threshold = max(0.03, mean_rms + 3.0 * std_rms)
+
+            self._video_rms_times = times
+            self._video_rms_values = rms.astype(np.float32)
+            self._video_threshold = threshold
+            self._video_mode = True
+
+            print(f"[ScreamDetector] ✓ Audio loaded: {len(rms)} windows, "
+                  f"duration={times[-1]:.1f}s, mean={mean_rms:.4f}, "
+                  f"max={rms.max():.4f}, threshold={threshold:.4f}")
+            return True
+        except Exception as e:
+            print(f"[ScreamDetector] Audio load failed: {e}")
+            self._video_mode = False
+            return False
+
+    def process_video_frame(self, pos_sec: float) -> None:
+        """
+        Call once per video frame with the current playback position.
+        Puts a detection event into self.detection_queue if loud enough.
+
+        Args:
+            pos_sec: Current video position in seconds
+        """
+        if not self._video_mode or self._video_rms_times is None:
+            return
+        idx = int(np.searchsorted(self._video_rms_times, pos_sec))
+        if idx >= len(self._video_rms_values):
+            return
+        rms_val = float(self._video_rms_values[idx])
+        current_time = datetime.now().timestamp()
+        if rms_val > self._video_threshold and \
+                current_time - self.last_detection_time > self.cooldown_seconds:
+            self.scream_detected = True
+            self.last_detection_time = current_time
+            self.stats['total_screams_detected'] += 1
+            score = min(1.0, rms_val / max(self._video_threshold, 0.001))
+            detection = {
+                'timestamp': datetime.now().isoformat(),
+                'score': score,
+                'volume': rms_val,
+                'type': 'scream',
+            }
+            self.detection_history.append(detection)
+            self.detection_queue.put(detection)
+            if self.debug:
+                print(f"[ScreamDetector] Scream at {pos_sec:.2f}s  rms={rms_val:.4f}")
+
+    # ------------------------------------------------------------------
+
     def reset_statistics(self):
         """Reset statistics"""
         self.stats = {
@@ -371,6 +458,9 @@ class ScreamDetector:
             'max_volume': 0.0
         }
         self.detection_history = []
+        self._video_mode = False
+        self._video_rms_times = None
+        self._video_rms_values = None
 
     def __del__(self):
         """Cleanup on deletion"""
