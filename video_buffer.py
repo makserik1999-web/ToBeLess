@@ -71,10 +71,7 @@ class TemporalFrameBuffer:
             frame: BGR image from OpenCV (H, W, 3)
         """
         with self.lock:
-            # Store raw frame
-            self.raw_frames.append(frame.copy())
-
-            # Preprocess and store
+            # Preprocess and store (raw_frames skipped — not used in hot path)
             preprocessed = self._preprocess_frame(frame)
             self.preprocessed_frames.append(preprocessed)
 
@@ -82,7 +79,10 @@ class TemporalFrameBuffer:
 
     def _preprocess_frame(self, frame: np.ndarray) -> torch.Tensor:
         """
-        Preprocess a single frame for SlowFast input
+        Preprocess a single frame for SlowFast input.
+
+        Resize FIRST (reduces pixel count ~18-41x), then cvtColor on the
+        small 224x224 image instead of the full-resolution source.
 
         Args:
             frame: BGR image from OpenCV (H, W, 3)
@@ -90,14 +90,14 @@ class TemporalFrameBuffer:
         Returns:
             Preprocessed tensor (C, H, W)
         """
-        # Convert BGR to RGB
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Resize to target size first (much cheaper cvtColor after)
+        frame_small = cv2.resize(frame, self.input_size)
 
-        # Resize to input size
-        frame_resized = cv2.resize(frame_rgb, self.input_size)
+        # Convert BGR -> RGB on the small frame
+        frame_rgb = cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB)
 
         # Convert to float32 and normalize to [0, 1]
-        frame_float = frame_resized.astype(np.float32) / 255.0
+        frame_float = frame_rgb.astype(np.float32) / 255.0
 
         if self.normalize:
             # Apply ImageNet normalization

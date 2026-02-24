@@ -272,12 +272,14 @@ class FightDetector:
 
         # ============ WARMUP INFERENCE ============
         # First inference is always slow due to CUDA kernel compilation
+        self._use_half = (self.device == 'cuda')
         try:
             print("[FightDetector] Running warmup inference...")
             dummy = np.zeros((RESIZE_WIDTH, RESIZE_WIDTH, 3), dtype=np.uint8)
             with torch.no_grad():
-                _ = self.model(dummy, imgsz=RESIZE_WIDTH, verbose=False)
-            print("[FightDetector] ✓ Warmup complete")
+                _ = self.model(dummy, imgsz=RESIZE_WIDTH, verbose=False,
+                               half=self._use_half)
+            print(f"[FightDetector] ✓ Warmup complete (FP{'16' if self._use_half else '32'})")
         except Exception as e:
             print(f"[FightDetector] Warmup failed: {e}")
 
@@ -537,6 +539,7 @@ class FightDetector:
                         verbose=False,
                         conf=0.5,
                         device=self.device,
+                        half=self._use_half,
                         augment=False,
                         visualize=False
                     )

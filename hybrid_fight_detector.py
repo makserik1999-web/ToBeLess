@@ -140,6 +140,10 @@ class HybridFightDetector:
         self._slowfast_inference_count = 0
         self._slowfast_last_time_ms = 0.0
 
+        # Buffer-throttle counter: add frame to SlowFast buffer every 2nd frame
+        # (halves preprocessing work while keeping enough temporal coverage)
+        self._buf_frame_counter = 0
+
         # Statistics
         self.stats = {
             'total_frames': 0,
@@ -150,12 +154,12 @@ class HybridFightDetector:
             'detection_history': deque(maxlen=1000)
         }
 
-        # Performance profiling
+        # Performance profiling (capped deques to prevent unbounded growth)
         self.profiling_stats = {
-            'yolo_times': [],
-            'slowfast_times': [],
-            'fusion_times': [],
-            'buffer_times': [],
+            'yolo_times': deque(maxlen=200),
+            'slowfast_times': deque(maxlen=200),
+            'fusion_times': deque(maxlen=200),
+            'buffer_times': deque(maxlen=200),
             'slowfast_calls': 0,
             'slowfast_skips': 0,
             'yolo_calls': 0,
@@ -265,9 +269,11 @@ class HybridFightDetector:
         self.stats['total_frames'] += 1
         self.profiling_stats['frames_processed'] += 1
 
-        # ---- Always add frame to temporal buffer (for SlowFast) ----
+        # ---- Add frame to temporal buffer every 2nd frame (halves preprocessing cost) ----
         _t_buf = time.perf_counter()
-        self.frame_buffer.add_frame(frame)
+        self._buf_frame_counter += 1
+        if self._buf_frame_counter % 2 == 0:
+            self.frame_buffer.add_frame(frame)
         self.profiling_stats['buffer_times'].append(time.perf_counter() - _t_buf)
 
         # ---- Stage 1: YOLO-Pose (only when run_yolo=True) ----
@@ -468,30 +474,30 @@ class HybridFightDetector:
         frame: np.ndarray,
         action_result: ActionResult,
     ) -> np.ndarray:
-        """Draw action recognition results on frame."""
+        """Draw action recognition results directly on the frame (no allocation)."""
         h, w = frame.shape[:2]
 
-        panel_h = 100
-        panel = np.zeros((panel_h, w, 3), dtype=np.uint8)
-        panel[:] = (40, 40, 40)
+        # Semi-transparent dark background over a small bottom-left region
+        bx0, by0, bx1, by1 = 5, h - 78, min(w, 320), h - 5
+        roi = frame[by0:by1, bx0:bx1]
+        roi[:] = (roi * 0.35).astype(np.uint8)
 
-        cv2.putText(panel, f"Action: {action_result.action}", (10, 28),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(panel, f"Conf: {action_result.confidence * 100:.1f}%", (10, 55),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        # Draw lines on the darkened ROI
+        lines = [
+            (f"Action: {action_result.action}", 0.55, (255, 255, 255), 1),
+            (f"Conf: {action_result.confidence * 100:.1f}%", 0.48, (200, 200, 200), 1),
+            ("VIOLENT" if action_result.is_violent else "Non-violent",
+             0.55, (60, 60, 255) if action_result.is_violent else (50, 220, 50), 2),
+            (f"SF: {self._slowfast_last_time_ms:.0f}ms #{self._slowfast_inference_count}",
+             0.4, (140, 140, 140), 1),
+        ]
+        y = h - 68
+        for text, scale, color, thick in lines:
+            cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX,
+                        scale, color, thick, cv2.LINE_AA)
+            y += 18
 
-        if action_result.is_violent:
-            cv2.putText(panel, "VIOLENT", (10, 82),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-        else:
-            cv2.putText(panel, "Non-violent", (10, 82),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-
-        time_text = f"SlowFast: {self._slowfast_last_time_ms:.0f}ms | #{self._slowfast_inference_count}"
-        cv2.putText(panel, time_text, (w - 280, 28),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (150, 150, 150), 1)
-
-        return np.vstack([frame, panel])
+        return frame
 
     def _build_fallback_areas(
         self,
@@ -700,10 +706,10 @@ class HybridFightDetector:
     def reset_profiling_stats(self):
         """Reset profiling statistics."""
         self.profiling_stats = {
-            'yolo_times': [],
-            'slowfast_times': [],
-            'fusion_times': [],
-            'buffer_times': [],
+            'yolo_times': deque(maxlen=200),
+            'slowfast_times': deque(maxlen=200),
+            'fusion_times': deque(maxlen=200),
+            'buffer_times': deque(maxlen=200),
             'slowfast_calls': 0,
             'slowfast_skips': 0,
             'yolo_calls': 0,
