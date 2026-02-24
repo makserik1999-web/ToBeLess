@@ -130,6 +130,7 @@ class HybridFightDetector:
         # ---- SlowFast background thread ----
         self._slowfast_lock = threading.Lock()
         self._slowfast_result = None  # Protected by _slowfast_lock
+        self._slowfast_result_time = 0.0  # Wall-clock time of last SlowFast result
         self._slowfast_running = True
         self._slowfast_thread = threading.Thread(
             target=self._slowfast_worker,
@@ -202,6 +203,7 @@ class HybridFightDetector:
                     # Publish result (thread-safe)
                     with self._slowfast_lock:
                         self._slowfast_result = action_result
+                        self._slowfast_result_time = time.time()
 
                     # Update profiling
                     self.profiling_stats['slowfast_times'].append(t1 - t0)
@@ -224,10 +226,13 @@ class HybridFightDetector:
 
         print("[SlowFast-Thread] Worker stopped")
 
-    def _get_latest_action_result(self) -> Optional[ActionResult]:
-        """Read latest SlowFast result (non-blocking, thread-safe)."""
+    def _get_latest_action_result(self) -> tuple:
+        """Read latest SlowFast result (non-blocking, thread-safe).
+        Returns (ActionResult|None, result_age_seconds).
+        """
         with self._slowfast_lock:
-            return self._slowfast_result
+            age = time.time() - self._slowfast_result_time if self._slowfast_result else float('inf')
+            return self._slowfast_result, age
 
     def stop(self):
         """Stop the background SlowFast thread."""
@@ -290,7 +295,7 @@ class HybridFightDetector:
             self.stats['pose_detections'] += 1
 
         # ---- Stage 2: Read latest SlowFast result (non-blocking) ----
-        action_result = self._get_latest_action_result()
+        action_result, action_age = self._get_latest_action_result()
         action_detected = False
         action_confidence = 0.0
 
@@ -298,6 +303,7 @@ class HybridFightDetector:
             action_detected = action_result.is_violent
             action_confidence = action_result.confidence
             self.last_action_result = action_result
+            self.last_action_result_age = action_age
 
         # ---- Hybrid decision fusion ----
         _t_fuse = time.perf_counter()
@@ -306,7 +312,8 @@ class HybridFightDetector:
             pose_confidence=pose_confidence,
             action_detected=action_detected,
             action_confidence=action_confidence,
-            people_count=pose_info.get('people_count', 0)
+            people_count=pose_info.get('people_count', 0),
+            action_age=action_age
         )
         self.profiling_stats['fusion_times'].append(time.perf_counter() - _t_fuse)
 
@@ -383,7 +390,8 @@ class HybridFightDetector:
         pose_confidence: float,
         action_detected: bool,
         action_confidence: float,
-        people_count: int = 2
+        people_count: int = 2,
+        action_age: float = float('inf')
     ) -> Tuple[bool, float, str]:
         """Fuse pose and action detection signals."""
         pose_conf_norm = pose_confidence / 100.0
@@ -392,17 +400,18 @@ class HybridFightDetector:
         # DEBUG: Print raw values to understand model behavior
         if action_detected or pose_detected:
             print(f"[DEBUG] Fusion Input: Pose={pose_detected} ({pose_conf_norm:.2f}), "
-                  f"Action={action_detected} ({action_conf_norm:.2f})")
+                  f"Action={action_detected} ({action_conf_norm:.2f}), Age={action_age:.1f}s")
 
         # SMART FUSION LOGIC:
-        # 1. If SlowFast says "NonFight" with high confidence -> VETO (return False)
-        # 2. If SlowFast says "Fight" -> CONFIRM (return True)
-        # 3. If SlowFast is unsure/not ready -> Fallback to YOLO
+        # 1. SlowFast says "Fight" -> CONFIRM (always trusted)
+        # 2. SlowFast says "NonFight" with HIGH confidence AND fresh result -> VETO
+        # 3. SlowFast is unsure / stale / not ready -> Fallback to YOLO-Pose
+        # 4. YOLO very confident (>80%) -> Can override weak NonFight veto
 
-        # Check for explicit non-violence from Action model
-        # (action_detected is True ONLY if class is 'Fight' AND conf > threshold)
-        # So if action_detected is False, we check if it was explicitly 'NonFight'
-        
+        VETO_CONF_THRESHOLD = 0.70   # SlowFast must be >70% confident to veto
+        RESULT_MAX_AGE_SEC  = 3.0    # SlowFast result older than 3s is considered stale
+        POSE_OVERRIDE_CONF  = 0.80   # YOLO can override NonFight if this confident
+
         if self.require_both:
             # Strict mode (Legacy)
             if pose_detected and action_detected:
@@ -411,32 +420,47 @@ class HybridFightDetector:
                 return True, confidence * 100, "Both pose and action detected violence"
             return False, 0.0, "Strict mode: requires both signals"
         else:
-            # Smart Mode (Recommended for RWF-2000)
-            
-            # If Action Model detects violence -> Strong indicator
+            # Smart Mode
+
+            # 1. SlowFast confirms violence -> trust it (requires >=2 people)
             if action_detected:
-                # Require higher confidence if YOLO only sees 1 person (ghost skeleton / self intersection)
                 if people_count < 2 and action_conf_norm < 0.8:
                     return False, 0.0, f"Action ({action_conf_norm:.2f}) ignored: only {people_count} person"
                 fused = action_conf_norm
                 reason = f"Action detected violence: {action_conf_norm:.1%}"
                 return True, fused * 100, reason
 
-            # If Action Model explicitly sees Non-Violence (run inference but result is NonFight)
-            # We assume if action_detected is False but we have a result, it's NonFight
-            if self.last_action_result and not action_detected:
-                # VETO: Even if pose says fight (hugging), action says no
-                if pose_detected:
-                    print(f"[Fusion] VETO: Pose detected fight, but Action model vetoed it.")
-                return False, 0.0, "Action model vetoed (NonFight)"
+            # 2. Conditional VETO: only if SlowFast is fresh AND very confident about NonFight
+            result_is_fresh = action_age < RESULT_MAX_AGE_SEC
+            result_is_confident = action_conf_norm >= VETO_CONF_THRESHOLD
+            pose_is_very_confident = pose_conf_norm >= POSE_OVERRIDE_CONF
+            action_status = "pending"  # Reason string for fallback logging
 
-            # Fallback: Action model not ready yet (buffer filling) -> Use Pose
-            # Require higher confidence (0.60) to avoid false positives while SlowFast is warming up
+            if self.last_action_result and not action_detected:
+                if result_is_fresh and result_is_confident:
+                    # Strong VETO — unless YOLO is extremely confident
+                    if pose_is_very_confident and pose_detected:
+                        # YOLO override: trust YOLO when it's very sure
+                        fused = pose_conf_norm * 0.8
+                        print(f"[Fusion] YOLO override: SlowFast says NonFight "
+                              f"({action_conf_norm:.0%}) but YOLO very confident ({pose_conf_norm:.0%})")
+                        return True, fused * 100, f"YOLO override (conf={pose_conf_norm:.0%})"
+                    if pose_detected:
+                        print(f"[Fusion] VETO: SlowFast NonFight ({action_conf_norm:.0%}, "
+                              f"age={action_age:.1f}s) overrides YOLO ({pose_conf_norm:.0%})")
+                    return False, 0.0, f"SlowFast veto (NonFight {action_conf_norm:.0%})"
+                else:
+                    # Stale or low-confidence NonFight -> don't veto, fallthrough to YOLO
+                    action_status = "stale" if not result_is_fresh else f"nonfight ({action_conf_norm:.0%})"
+                    if pose_detected:
+                        print(f"[Fusion] Skipping weak VETO ({action_status}), using YOLO")
+
+            # 3. Fallback: action model not ready / veto skipped -> use YOLO
             if pose_detected:
-                fused = pose_conf_norm * 0.7
-                if fused >= 0.60:
-                    return True, fused * 100, f"Pose detected (conf={pose_conf_norm:.2f}), action pending"
-            
+                fused = pose_conf_norm * 0.75
+                if fused >= 0.55:  # Slightly lower threshold than before (was 0.60)
+                    return True, fused * 100, f"Pose detected (conf={pose_conf_norm:.0%}), action={action_status}"
+
             return False, 0.0, "No signals detected"
 
     def _draw_action_overlay(
@@ -610,8 +634,10 @@ class HybridFightDetector:
         self._fight_detected = False
         self.last_fight_frame = -999
         self.last_action_result = None
+        self.last_action_result_age = float('inf')
         with self._slowfast_lock:
             self._slowfast_result = None
+            self._slowfast_result_time = 0.0
         self.reset_profiling_stats()
 
     def get_profiling_stats(self) -> Dict:

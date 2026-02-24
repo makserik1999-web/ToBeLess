@@ -207,16 +207,8 @@ def load_faces_from_folder(face_recognizer, folder_path="faces/images"):
 
 class FightDetector:
     def __init__(self, model_path="yolov8n-pose.pt", device=None):
-        # --- Face recognition init ---
-        try:
-            self.face_rec = FaceRecognizer(
-                yolo_model_path="yolov8n-face.pt",
-                db_path="faces/embeddings.json",
-                debug=False  # Reduced logging
-            )
-        except Exception as e:
-            print("[FightDetector] FaceRecognizer init failed:", e)
-            self.face_recognizer = None
+        # --- Face recognition init (device is resolved later, patched in start_stream) ---
+        self.face_rec = None          # set after device is known
         self.last_recognition = {}
 
         # ============ GPU DIAGNOSTICS ============
@@ -303,6 +295,11 @@ class FightDetector:
         self.last_poses = []
         self.last_fight_info = {'confidence': 0, 'fight_detected': False, 'fight_areas': []}
         self.skip_counter = 0  # Internal skip counter for YOLO inference
+
+        # Face recognition throttle — run InsightFace every N frames only
+        self.face_rec_interval = 20   # adjust: lower = more accurate, higher = faster
+        self._face_rec_counter = 0
+        self._last_face_data = []     # cached results reused between recognition frames
 
         self.analytics = {
             'total_detections': 0,
@@ -617,24 +614,47 @@ class FightDetector:
                 except Exception as e:
                     print(f"[FightDetector] face blur error: {e}")
 
-            if face_recognition_enabled and hasattr(self, 'face_rec') and self.face_rec is not None:
-                # Simplified: just mark as Unknown for now (face rec is disabled by default)
-                identified_names = ["Unknown"] * len(poses)
-            elif not identified_names:
+            if face_recognition_enabled and self.face_rec is not None:
+                try:
+                    self._face_rec_counter += 1
+                    if self._face_rec_counter >= self.face_rec_interval:
+                        # Run InsightFace inference and refresh cache
+                        self._face_rec_counter = 0
+                        self._last_face_data = self.face_rec.get_face_data(out, min_conf=0.5)
+                    face_data = self._last_face_data
+                    identified_names = [fd['name'] for fd in face_data] if face_data else []
+                    # Draw face bboxes + name labels from cache
+                    for fd in face_data:
+                        fx1, fy1, fx2, fy2 = fd['bbox']
+                        name = fd['name']
+                        score = fd.get('score')
+                        color = (0, 220, 0) if name != 'Unknown' else (0, 140, 255)
+                        cv2.rectangle(out, (fx1, fy1), (fx2, fy2), color, 2)
+                        label = name if score is None else f"{name} ({1 - score:.2f})"
+                        cv2.putText(out, label, (fx1, fy1 - 5),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
+                except Exception as e:
+                    print(f"[FightDetector] face recognition error: {e}")
+                    identified_names = []
+
+            if not identified_names:
                 identified_names = ["—"] * len(poses)
 
         # Draw skeletons (always green - hybrid will redraw red if confirmed)
         for p in poses:
             self.draw_skeleton(out, p['keypoints'], (0, 255, 0))
 
-        # Draw names
-        for i, p in enumerate(poses):
-            if i < len(identified_names):
-                name = identified_names[i]
-                bbox = self.get_bbox(p['keypoints'])
-                if bbox and name and name != "—":
-                    x1, y1, x2, y2 = bbox
-                    cv2.putText(out, name, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        # Draw names on pose bboxes only when face recognition is OFF
+        # (when it's ON, names are already drawn on face bboxes above)
+        if not face_recognition_enabled:
+            for i, p in enumerate(poses):
+                if i < len(identified_names):
+                    name = identified_names[i]
+                    bbox = self.get_bbox(p['keypoints'])
+                    if bbox and name and name != "—":
+                        x1, y1, x2, y2 = bbox
+                        cv2.putText(out, name, (x1, y1 - 5),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
         # Build return metrics
         metrics['people_count'] = len(poses)
@@ -741,6 +761,9 @@ def processing_loop(source_is_file=False, job_id=None):
     fall_count = 0
     scream_count = 0
 
+    # Per-person face-sighting cooldown {name: last_alert_timestamp}
+    face_seen_times: dict = {}
+
     # Reset profiler for new session
     profiler.reset()
 
@@ -821,6 +844,17 @@ def processing_loop(source_is_file=False, job_id=None):
                         'timestamp': datetime.now().isoformat(),
                         'details': f"People involved: {len(detector.pose_history[-1]) if detector.pose_history else 0}"
                     })
+
+            # Face-sighting alerts (known persons, per-person cooldown)
+            face_alert_cooldown = 60  # seconds between alerts for the same person
+            known_names = [
+                n for n in metrics.get('people_names', []) or []
+                if n and n not in ('Unknown', '—', '')
+            ]
+            for name in set(known_names):
+                if time.time() - face_seen_times.get(name, 0) > face_alert_cooldown:
+                    _send_alert_nonblocking(f"👤 Known person detected: {name}")
+                    face_seen_times[name] = time.time()
 
             # Frame update and stats (profiled)
             with profiler.time_function('frame_update'):
@@ -987,9 +1021,19 @@ def start_stream():
                 print(f"  SlowFast device: {detector.slowfast_detector.device}")
             print("="*50 + "\n")
 
-            # Автозагрузка лиц из папки faces/images
-            if hasattr(pose_detector, 'face_rec') and pose_detector.face_rec:
+            # Init FaceRecognizer now that we know the device (CUDA / CPU)
+            try:
+                fr_device = pose_detector.device  # 'cuda' or 'cpu'
+                pose_detector.face_rec = FaceRecognizer(
+                    db_path="faces/embeddings.json",
+                    device=fr_device,
+                    debug=False,
+                )
+                print(f"[App] FaceRecognizer initialised on {fr_device} (backend={pose_detector.face_rec.backend})")
                 load_faces_from_folder(pose_detector.face_rec, folder_path="faces/images")
+            except Exception as e:
+                print(f"[App] FaceRecognizer init failed: {e}")
+                pose_detector.face_rec = None
         except Exception as e:
             return jsonify({'success': False, 'error': f'Failed to init detector: {e}'})
 

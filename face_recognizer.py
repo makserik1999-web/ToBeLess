@@ -1,11 +1,15 @@
 """
 face_recognizer.py - High-quality face recognition using InsightFace (ArcFace + RetinaFace)
-with dlib/face_recognition and pixel-vectorization fallbacks.
+with DeepFace, dlib/face_recognition, and pixel-vectorization fallbacks.
 
 Backends (selected automatically in order of preference):
-  1. InsightFace  — pip install insightface onnxruntime  (GPU: onnxruntime-gpu)
-  2. dlib         — pip install face_recognition dlib
-  3. Pixel (built-in) — YOLO/Haar + grayscale L2-norm, no extra deps
+  1. InsightFace  — pip install insightface onnxruntime          ← best accuracy; needs MSVC on Windows
+  2. DeepFace     — pip install deepface tf-keras                ← ArcFace quality; pure-Python install
+  3. dlib         — pip install face_recognition dlib            ← good; needs MSVC on Windows
+  4. Pixel (built-in) — YOLO/Haar + grayscale L2-norm, no extra deps
+
+For Windows without Visual C++ Build Tools, use backend 2:
+  pip install deepface tf-keras
 
 Public API (unchanged, backwards-compatible):
   detect_faces(frame, min_conf)           → list[(x1,y1,x2,y2,conf)]
@@ -15,7 +19,7 @@ Public API (unchanged, backwards-compatible):
   bulk_register_from_folder(folder)
   save_db()
   list_persons()                          → {name: count}
-  backend  property                       → 'insightface' | 'dlib' | 'pixel'
+  backend  property                       → 'insightface' | 'deepface' | 'dlib' | 'pixel'
 """
 
 import json
@@ -33,6 +37,12 @@ try:
 except ImportError:
     pass
 
+_DeepFace = None
+try:
+    from deepface import DeepFace as _DeepFace  # noqa: F401
+except ImportError:
+    pass
+
 _dlib_lib = None
 try:
     import face_recognition as _dlib_lib  # noqa: F401
@@ -47,8 +57,9 @@ except ImportError:
 
 # Expected embedding dimensions per backend (used for DB compatibility checks)
 _EMB_DIM = {
-    'insightface': 512,   # buffalo_s / buffalo_l ArcFace
-    'dlib':        128,   # dlib ResNet face descriptor
+    'insightface': 512,    # buffalo_s / buffalo_l ArcFace
+    'deepface':    512,    # DeepFace ArcFace model (same 512-d space)
+    'dlib':        128,    # dlib ResNet face descriptor
     'pixel':       128 * 128,  # flattened 128×128 grayscale
 }
 
@@ -66,11 +77,13 @@ class FaceRecognizer:
         Path to the JSON embedding database.
     model_name : str
         InsightFace model pack. 'buffalo_s' (fast, ~30 MB) or 'buffalo_l' (accurate, ~500 MB).
+        Ignored when using the DeepFace / dlib / pixel backends.
     yolo_model_path : str
         YOLO face model used by the pixel fallback backend.
     threshold : float
         Cosine distance threshold: 0 = identical vectors, 2 = opposite.
-        Typical range for ArcFace: 0.35–0.55; dlib: 0.40–0.55; pixel: 0.35–0.50.
+        Typical range for ArcFace (insightface/deepface): 0.35–0.55;
+        dlib: 0.40–0.55; pixel: 0.35–0.50.
     min_confidence_gap : float
         Required gap between best and second-best match to accept an ID.
     device : str
@@ -103,6 +116,8 @@ class FaceRecognizer:
 
         self._backend = "pixel"
         self._insight_app = None
+        self._deepface = None      # DeepFace module reference
+        self._deepface_detector = "opencv"  # detector backend used by DeepFace
         self._dlib_lib = None
         self._yolo = None
         self._haar = None
@@ -143,7 +158,30 @@ class FaceRecognizer:
                 if self.debug:
                     print(f"[FaceRecognizer] InsightFace failed ({exc}), trying dlib…")
 
-        # 2) dlib / face_recognition
+        # 2) DeepFace (ArcFace via TensorFlow — pip install deepface tf-keras, no C++ needed)
+        if _DeepFace is not None:
+            try:
+                # Warm-up: load ArcFace model weights on first call
+                # Use 'opencv' detector (pure Python, fastest); 'retinaface' is more
+                # accurate but requires extra deps (pip install retina-face).
+                dummy = np.zeros((112, 112, 3), dtype=np.uint8)
+                _DeepFace.represent(
+                    img_path=dummy,
+                    model_name="ArcFace",
+                    detector_backend="opencv",
+                    enforce_detection=False,
+                    silent=True,
+                )
+                self._deepface = _DeepFace
+                self._backend = "deepface"
+                if self.debug:
+                    print("[FaceRecognizer] ✓ DeepFace (ArcFace/opencv) loaded")
+                return
+            except Exception as exc:
+                if self.debug:
+                    print(f"[FaceRecognizer] DeepFace failed ({exc}), trying dlib…")
+
+        # 3) dlib / face_recognition
         if _dlib_lib is not None:
             self._dlib_lib = _dlib_lib
             self._backend = "dlib"
@@ -151,7 +189,7 @@ class FaceRecognizer:
                 print("[FaceRecognizer] ✓ dlib/face_recognition loaded")
             return
 
-        # 3) Pixel fallback: YOLO face + Haar
+        # 4) Pixel fallback: YOLO face + Haar
         self._backend = "pixel"
         if _YOLO is not None and yolo_model_path:
             try:
@@ -285,6 +323,8 @@ class FaceRecognizer:
         """
         if self._backend == "insightface":
             return self._detect_insightface(frame_bgr, min_conf)
+        elif self._backend == "deepface":
+            return self._detect_deepface(frame_bgr, min_conf)
         elif self._backend == "dlib":
             return self._detect_dlib(frame_bgr, min_conf)
         return self._detect_pixel(frame_bgr, min_conf)
@@ -314,6 +354,45 @@ class FaceRecognizer:
         except Exception as exc:
             if self.debug:
                 print(f"[FaceRecognizer] InsightFace detect error: {exc}")
+            return []
+
+    def _detect_deepface(self, frame_bgr: np.ndarray, min_conf: float) -> list[dict]:
+        """DeepFace detection (opencv) + ArcFace 512-d embedding."""
+        try:
+            # DeepFace expects RGB
+            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            h, w = frame_bgr.shape[:2]
+            reps = self._deepface.represent(
+                img_path=rgb,
+                model_name="ArcFace",
+                detector_backend=self._deepface_detector,
+                enforce_detection=False,
+                align=True,
+                silent=True,
+            )
+            results = []
+            for rep in reps:
+                area = rep.get("facial_area", {})
+                x = int(area.get("x", 0))
+                y = int(area.get("y", 0))
+                fw = int(area.get("w", 0))
+                fh = int(area.get("h", 0))
+                conf = float(area.get("confidence", rep.get("face_confidence", 0.85)))
+                if conf < min_conf or fw < 20 or fh < 20:
+                    continue
+                x1 = max(0, x)
+                y1 = max(0, y)
+                x2 = min(w - 1, x + fw)
+                y2 = min(h - 1, y + fh)
+                raw_emb = rep.get("embedding")
+                emb = self._normalize(np.array(raw_emb, dtype=np.float32)) if raw_emb else None
+                results.append({"bbox": (x1, y1, x2, y2), "conf": conf, "embedding": emb})
+            if self.debug and results:
+                print(f"[FaceRecognizer] DeepFace: {len(results)} face(s)")
+            return results
+        except Exception as exc:
+            if self.debug:
+                print(f"[FaceRecognizer] DeepFace detect error: {exc}")
             return []
 
     def _detect_dlib(self, frame_bgr: np.ndarray, min_conf: float) -> list[dict]:
@@ -412,6 +491,8 @@ class FaceRecognizer:
         """Extract embedding from a *cropped* face image using the active backend."""
         if self._backend == "insightface":
             return self._embed_insightface_crop(crop_bgr)
+        elif self._backend == "deepface":
+            return self._embed_deepface_crop(crop_bgr)
         elif self._backend == "dlib":
             return self._embed_dlib_crop(crop_bgr)
         return self._embed_pixel(crop_bgr)
@@ -440,6 +521,32 @@ class FaceRecognizer:
         except Exception as exc:
             if self.debug:
                 print(f"[FaceRecognizer] InsightFace embed error: {exc}")
+            return None
+
+    def _embed_deepface_crop(self, crop_bgr: np.ndarray) -> np.ndarray | None:
+        """Extract DeepFace ArcFace 512-d embedding from a tight crop.
+        Uses detector_backend='skip' so no re-detection is attempted — the entire
+        crop is treated as the face region and aligned internally by ArcFace.
+        """
+        try:
+            rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+            reps = self._deepface.represent(
+                img_path=rgb,
+                model_name="ArcFace",
+                detector_backend="skip",  # treat entire crop as face
+                enforce_detection=False,
+                align=True,
+                silent=True,
+            )
+            if not reps:
+                return None
+            raw_emb = reps[0].get("embedding")
+            if raw_emb is None:
+                return None
+            return self._normalize(np.array(raw_emb, dtype=np.float32))
+        except Exception as exc:
+            if self.debug:
+                print(f"[FaceRecognizer] DeepFace embed error: {exc}")
             return None
 
     def _embed_dlib_crop(self, crop_bgr: np.ndarray) -> np.ndarray | None:
