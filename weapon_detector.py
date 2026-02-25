@@ -73,23 +73,24 @@ class WeaponDetector:
                 p = Path(model_path)
                 if p.exists():
                     self.model = YOLO(str(p))
-                    if self.debug:
-                        print(f"[WeaponDetector] ✓ YOLO loaded from {p}")
+                    print(f"[WeaponDetector] ✓ General YOLO loaded from {p}")
+                else:
+                    print(f"[WeaponDetector] General model not found: {p}")
             except Exception as e:
-                if self.debug:
-                    print(f"[WeaponDetector] YOLO load error: {e}")
+                print(f"[WeaponDetector] General YOLO load error: {e}")
 
-        # Load specialized weapon model if provided
+        # Load specialized weapon model (pistol + knife)
         if YOLO is not None and weapon_model_path:
             try:
                 p = Path(weapon_model_path)
                 if p.exists():
                     self.weapon_model = YOLO(str(p))
-                    if self.debug:
-                        print(f"[WeaponDetector] ✓ Weapon model loaded from {p}")
+                    classes = list(self.weapon_model.names.values())
+                    print(f"[WeaponDetector] ✓ Weapon model loaded from {p} — classes: {classes}")
+                else:
+                    print(f"[WeaponDetector] Weapon model not found: {p} — run download_weapon_model.py")
             except Exception as e:
-                if self.debug:
-                    print(f"[WeaponDetector] Weapon model load error: {e}")
+                print(f"[WeaponDetector] Weapon model load error: {e}")
 
         # Detection history for analytics
         self.detection_history = []

@@ -377,42 +377,88 @@ class ScreamDetector:
         """
         Pre-load audio from a video file for offline scream detection.
         Simple rule: RMS volume > auto-calibrated threshold  →  scream.
-
-        Args:
-            video_path: Path to video file (mp4, avi, etc.)
-
-        Returns:
-            True if audio was loaded successfully
+        Works without librosa: uses ffmpeg → raw WAV → numpy RMS.
         """
-        if not LIBROSA_AVAILABLE:
-            print("[ScreamDetector] librosa not available – cannot load video audio")
+        import subprocess, tempfile, os, wave
+
+        print(f"[ScreamDetector] Loading audio from {video_path} ...")
+        y, sr = None, None
+
+        # --- Attempt 1: librosa direct (if installed) ---
+        if LIBROSA_AVAILABLE:
+            try:
+                y, sr = librosa.load(video_path, sr=22050, mono=True)
+                print("[ScreamDetector] librosa load OK")
+            except Exception as e1:
+                print(f"[ScreamDetector] librosa failed ({e1}), trying ffmpeg...")
+
+        # --- Attempt 2: ffmpeg → 16-bit WAV → numpy ---
+        if y is None:
+            # Prefer bundled ffmpeg from imageio-ffmpeg (no PATH needed)
+            ffmpeg_exe = 'ffmpeg'
+            try:
+                import imageio_ffmpeg
+                ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+            except ImportError:
+                pass
+
+            tmp_wav = tempfile.mktemp(suffix='.wav')
+            try:
+                result = subprocess.run(
+                    [ffmpeg_exe, '-y', '-i', video_path,
+                     '-vn', '-acodec', 'pcm_s16le', '-ar', '22050', '-ac', '1',
+                     tmp_wav],
+                    capture_output=True, timeout=120
+                )
+                if result.returncode == 0:
+                    with wave.open(tmp_wav, 'rb') as wf:
+                        sr = wf.getframerate()
+                        raw = wf.readframes(wf.getnframes())
+                    y = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                    print(f"[ScreamDetector] ffmpeg+wave OK ({len(y)/sr:.1f}s)")
+                else:
+                    print(f"[ScreamDetector] ffmpeg error: {result.stderr.decode()[-300:]}")
+            except Exception as e2:
+                print(f"[ScreamDetector] ffmpeg extraction failed: {e2}")
+            finally:
+                if os.path.exists(tmp_wav):
+                    try:
+                        os.unlink(tmp_wav)
+                    except Exception:
+                        pass
+
+        if y is None or sr is None:
+            print("[ScreamDetector] ✗ Cannot load audio – scream detection disabled for this file")
+            self._video_mode = False
             return False
+
         try:
-            print(f"[ScreamDetector] Loading audio from {video_path} ...")
-            y, sr = librosa.load(video_path, sr=22050, mono=True)
-
-            # Compute RMS in 0.25-s windows
+            # Compute RMS in 0.25-s windows using pure numpy
             hop = int(sr * 0.25)
-            frame_length = int(sr * 0.5)
-            rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop)[0]
-            times = librosa.frames_to_time(np.arange(len(rms)), sr=sr, hop_length=hop)
+            win = int(sr * 0.5)
+            n = max(1, (len(y) - win) // hop + 1)
+            rms = np.array(
+                [float(np.sqrt(np.mean(y[i * hop: i * hop + win] ** 2))) for i in range(n)],
+                dtype=np.float32,
+            )
+            times = np.arange(n, dtype=np.float32) * 0.25  # seconds per window
 
-            # Auto-calibrate threshold: mean + 3*std (catches unusually loud peaks)
-            mean_rms = float(rms.mean())
-            std_rms = float(rms.std())
-            threshold = max(0.03, mean_rms + 3.0 * std_rms)
+            # Auto-calibrate: mean + 2×std  (only unusually loud windows trigger)
+            mean_rms  = float(rms.mean())
+            std_rms   = float(rms.std())
+            threshold = max(0.03, mean_rms + 2.0 * std_rms)
 
-            self._video_rms_times = times
-            self._video_rms_values = rms.astype(np.float32)
-            self._video_threshold = threshold
-            self._video_mode = True
+            self._video_rms_times  = times
+            self._video_rms_values = rms
+            self._video_threshold  = threshold
+            self._video_mode       = True
 
-            print(f"[ScreamDetector] ✓ Audio loaded: {len(rms)} windows, "
+            print(f"[ScreamDetector] ✓ Audio ready: {n} windows, "
                   f"duration={times[-1]:.1f}s, mean={mean_rms:.4f}, "
                   f"max={rms.max():.4f}, threshold={threshold:.4f}")
             return True
         except Exception as e:
-            print(f"[ScreamDetector] Audio load failed: {e}")
+            print(f"[ScreamDetector] RMS computation failed: {e}")
             self._video_mode = False
             return False
 

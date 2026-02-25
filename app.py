@@ -773,6 +773,13 @@ def processing_loop(source_is_file=False, job_id=None):
     # Reset profiler for new session
     profiler.reset()
 
+    # Startup diagnostics
+    if scream_detector is None:
+        print("[Loop] Scream detector: None")
+    else:
+        vm = getattr(scream_detector, '_video_mode', False)
+        print(f"[Loop] Scream detector: OK (video_mode={vm})")
+
     try:
         while stream_active and video_cap and video_cap.isOpened():
             frame_start = time.perf_counter()
@@ -1108,7 +1115,8 @@ def start_stream():
             dev = detector.device if detector and hasattr(detector, 'device') else 'cpu'
             weapon_detector = WeaponDetector(
                 model_path="yolov8n.pt",
-                confidence_threshold=0.5,
+                weapon_model_path="models/weapon_model.pt",
+                confidence_threshold=0.45,
                 device=dev,
                 debug=False
             )
