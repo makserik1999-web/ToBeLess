@@ -13,6 +13,7 @@ export interface StreamResponse {
   stream_url?: string;
   job_id?: string;
   error?: string;
+  video_filename?: string;
 }
 
 export const streamApi = {

@@ -23,6 +23,7 @@ export function LiveMonitoring() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showDetectionView, setShowDetectionView] = useState(false);
   const [streamKey, setStreamKey] = useState(Date.now());
+  const [pendingVideoFilename, setPendingVideoFilename] = useState<string | undefined>(undefined);
 
   const [detectionMode, setDetectionMode] = useState<DetectionMode>('fight');
   const [privacyMode, setPrivacyMode] = useState<PrivacyMode>('off');
@@ -378,7 +379,8 @@ export function LiveMonitoring() {
         onSuccess={() => {
           setStreamKey(Date.now());
         }}
-        onStartDetection={() => {
+        onStartDetection={(videoFilename) => {
+          setPendingVideoFilename(videoFilename);
           setShowDetectionView(true);
         }}
       />
@@ -388,6 +390,7 @@ export function LiveMonitoring() {
         isOpen={showDetectionView}
         onClose={() => setShowDetectionView(false)}
         streamKey={streamKey}
+        initialVideoFilename={pendingVideoFilename}
       />
     </div>
   );

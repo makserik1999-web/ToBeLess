@@ -34,7 +34,8 @@ const PRIVACY_MODE_OPTIONS: { value: PrivacyMode; label: string }[] = [
 interface LiveDetectionViewProps {
   isOpen: boolean;
   onClose: () => void;
-  streamKey?: number; // Changes when a new stream starts to force video refresh
+  streamKey?: number;             // Changes when a new stream starts to force video refresh
+  initialVideoFilename?: string;  // Filename known immediately from /start_stream response
 }
 
 interface Stats {
@@ -48,7 +49,7 @@ interface Stats {
   timestamp?: number;
 }
 
-export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionViewProps) {
+export function LiveDetectionView({ isOpen, onClose, streamKey, initialVideoFilename }: LiveDetectionViewProps) {
   const { theme } = useTheme();
   const [stats, setStats] = useState<Stats>({
     people: 0,
@@ -74,6 +75,8 @@ export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionV
   }, []);
   const [feedKey, setFeedKey] = useState(Date.now());
   const videoFeedUrl = `${apiClient.getStreamUrl('/video_feed')}?t=${feedKey}`;
+  const [videoFilename, setVideoFilename] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Load detection status on mount and reset feed
   useEffect(() => {
@@ -81,6 +84,9 @@ export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionV
 
     // Reset feed key to get fresh video - use streamKey if provided, otherwise Date.now()
     setFeedKey(streamKey || Date.now());
+
+    // Seed video filename immediately from /start_stream response (avoids SSE delay)
+    setVideoFilename(initialVideoFilename ?? null);
 
     // Reset stats
     setStats({
@@ -128,6 +134,7 @@ export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionV
           fps: data.fps || 0,
           timestamp: data.timestamp || Date.now(),
         });
+        if (data.video_filename) setVideoFilename(data.video_filename);
       } catch (err) {
         console.error('Error parsing stats:', err);
       }
@@ -146,6 +153,22 @@ export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionV
       }
     };
   }, [isOpen]);
+
+  // Play/pause audio when scream mode is active and a video file is available
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (detectionMode === 'scream' && videoFilename) {
+      const src = apiClient.getStreamUrl(`/uploads/${videoFilename}`);
+      if (audio.src !== src) {
+        audio.src = src;
+        audio.load();
+      }
+      audio.play().catch(() => { /* autoplay blocked by browser policy */ });
+    } else {
+      audio.pause();
+    }
+  }, [detectionMode, videoFilename]);
 
   // Load events on open, then auto-refresh every 15 s
   useEffect(() => {
@@ -366,7 +389,26 @@ export function LiveDetectionView({ isOpen, onClose, streamKey }: LiveDetectionV
                     FPS: {stats.fps.toFixed(1)}
                   </div>
                 </div>
+
+                {/* Scream mode audio indicator badge */}
+                {detectionMode === 'scream' && videoFilename && (
+                  <div className="absolute bottom-4 left-4 flex items-center gap-2 bg-purple-600/80 backdrop-blur-sm px-3 py-1.5 rounded-lg">
+                    <Volume2 className="w-4 h-4 text-white" />
+                    <span className="text-xs text-white font-medium">Audio active</span>
+                  </div>
+                )}
               </div>
+
+              {/* Audio player for scream detection — shown below video feed */}
+              {detectionMode === 'scream' && videoFilename && (
+                <audio
+                  ref={audioRef}
+                  src={apiClient.getStreamUrl(`/uploads/${videoFilename}`)}
+                  controls
+                  className="w-full mt-2 rounded-xl"
+                  style={{ height: '36px' }}
+                />
+              )}
             </div>
 
             {/* Stats Panel */}

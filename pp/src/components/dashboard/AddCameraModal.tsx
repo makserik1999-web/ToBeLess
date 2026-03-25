@@ -9,7 +9,7 @@ interface AddCameraModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: () => void;
-  onStartDetection?: () => void;
+  onStartDetection?: (videoFilename?: string) => void;
 }
 
 type VideoSource = 'file' | 'webcam' | 'rtsp';
@@ -100,7 +100,7 @@ export function AddCameraModal({ isOpen, onClose, onSuccess, onStartDetection }:
         setSuccess(true);
         setTimeout(() => {
           onSuccess?.();
-          onStartDetection?.();
+          onStartDetection?.(response.video_filename);
           onClose();
         }, 1000);
       } else {

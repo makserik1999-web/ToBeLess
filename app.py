@@ -709,6 +709,8 @@ current_frame = None
 stream_active = False
 
 analytics_buffer = deque(maxlen=4000)
+current_video_filename = None   # basename of the currently playing video file (None for webcam/RTSP)
+
 latest_stats = {
     'people': 0,
     'fights': 0,
@@ -717,7 +719,8 @@ latest_stats = {
     'screams': 0,
     'fps': 0,
     'confidence': 0.0,
-    'timestamp': None
+    'timestamp': None,
+    'video_filename': None        # exposed to frontend for audio playback
 }
 latest_stats_lock = threading.Lock()
 last_alert_time = 0
@@ -759,6 +762,17 @@ def processing_loop(source_is_file=False, job_id=None):
     frame_count = 0
     processed = 0
     t0 = time.time()
+
+    # For scream mode: throttle frame reading to the video's native FPS so that
+    # audio playback in the browser stays synchronised with the MJPEG stream.
+    source_fps = None
+    if source_is_file and video_cap:
+        try:
+            source_fps = float(video_cap.get(cv2.CAP_PROP_FPS)) or None
+        except Exception:
+            source_fps = None
+    # Minimum inter-frame interval when throttling (seconds)
+    frame_interval = (1.0 / source_fps) if source_fps and source_fps > 0 else None
 
     # Detection counters for this session
     weapon_count = 0
@@ -808,8 +822,8 @@ def processing_loop(source_is_file=False, job_id=None):
             frame_count += 1
             profiler.frame_count += 1
 
-            # Video file scream detection: check audio volume at current position
-            if source_is_file and scream_detector is not None:
+            # Video file scream detection — only in 'scream' mode
+            if source_is_file and scream_detector is not None and current_detection_mode == 'scream':
                 pos_sec = video_cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
                 scream_detector.process_video_frame(pos_sec)
 
@@ -877,10 +891,10 @@ def processing_loop(source_is_file=False, job_id=None):
                     _send_alert_nonblocking(f"👤 Known person detected: {name}")
                     face_seen_times[name] = time.time()
 
-            # Weapon detection (every 3 frames in weapon mode, every 5 in fight mode, off in scream mode)
-            weapon_interval = 3 if current_detection_mode == 'weapon' else 5
+            # Weapon detection — only in 'weapon' mode
+            weapon_interval = 3
             if weapon_detection_enabled and weapon_detector is not None and out_frame is not None \
-                    and current_detection_mode != 'scream':
+                    and current_detection_mode == 'weapon':
                 weapon_frame_counter += 1
                 if weapon_frame_counter >= weapon_interval:
                     weapon_frame_counter = 0
@@ -909,8 +923,8 @@ def processing_loop(source_is_file=False, job_id=None):
                     except Exception as e:
                         print(f"[weapon] {e}")
 
-            # Scream detection events — drain the audio queue
-            if scream_detector is not None:
+            # Scream detection events — drain the audio queue (only in 'scream' mode)
+            if scream_detector is not None and current_detection_mode == 'scream':
                 try:
                     while True:
                         evt = scream_detector.detection_queue.get_nowait()
@@ -970,6 +984,7 @@ def processing_loop(source_is_file=False, job_id=None):
                         # Don't use stale historical confidence when no fight is detected
                         latest_stats['confidence'] = float(metrics.get('confidence', 0.0))
                         latest_stats['timestamp'] = snap['timestamp']
+                        latest_stats['video_filename'] = current_video_filename
                 except Exception as e:
                     print(f"[analytics error] {e}")
 
@@ -980,6 +995,14 @@ def processing_loop(source_is_file=False, job_id=None):
             # Print profiling stats every PROFILE_INTERVAL frames
             if PROFILING_ENABLED and frame_count % PROFILE_INTERVAL == 0:
                 profiler.print_stats(hybrid_detector=detector)
+
+            # Throttle to native video FPS in scream mode so the browser audio
+            # stream stays synchronised with the MJPEG frame stream.
+            if frame_interval and current_detection_mode == 'scream':
+                elapsed = time.perf_counter() - frame_start
+                wait = frame_interval - elapsed
+                if wait > 0:
+                    time.sleep(wait)
     
     except Exception as e:
         print("[processing_loop] fatal:", e, traceback.format_exc())
@@ -1063,7 +1086,7 @@ def detection():
 
 @app.route('/start_stream', methods=['POST'])
 def start_stream():
-    global detector, weapon_detector, fall_detector, scream_detector, video_cap, proc_thread, stream_active
+    global detector, weapon_detector, fall_detector, scream_detector, video_cap, proc_thread, stream_active, current_video_filename
 
     if detector is None:
         try:
@@ -1167,6 +1190,7 @@ def start_stream():
             return jsonify({'success': False, 'error': f'Failed save: {e}'})
         source = str(saved)
         source_is_file = True
+        current_video_filename = saved.name   # expose to frontend
         job_id = uuid.uuid4().hex
         with JOBS_LOCK:
             JOBS[job_id] = {
@@ -1220,14 +1244,15 @@ def start_stream():
         proc_thread = threading.Thread(target=processing_loop, args=(source_is_file, job_id), daemon=True)
         proc_thread.start()
         
-        return jsonify({'success': True, 'streaming': True, 'stream_url': '/video_feed'})
+        return jsonify({'success': True, 'streaming': True, 'stream_url': '/video_feed',
+                        'video_filename': current_video_filename})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e), 'trace': traceback.format_exc()})
 
 
 @app.route('/stop_stream', methods=['POST'])
 def stop_stream():
-    global stream_active, proc_thread, video_cap, current_frame, latest_stats, detector
+    global stream_active, proc_thread, video_cap, current_frame, latest_stats, detector, current_video_filename
     stream_active = False
     if proc_thread and proc_thread.is_alive():
         proc_thread.join(timeout=2.0)
@@ -1249,10 +1274,11 @@ def stop_stream():
         current_frame = None
 
     # Reset stats
+    current_video_filename = None
     with latest_stats_lock:
         latest_stats = {
             'people': 0, 'fights': 0, 'weapons': 0, 'falls': 0, 'screams': 0,
-            'fps': 0, 'confidence': 0, 'timestamp': None
+            'fps': 0, 'confidence': 0, 'timestamp': None, 'video_filename': None
         }
 
     return jsonify({'success': True})
@@ -1837,3 +1863,5 @@ if __name__ == "__main__":
     print("=" * 60)
     print("")
     app.run(host="0.0.0.0", port=8080, debug=True)
+
+#lool
